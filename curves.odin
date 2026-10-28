@@ -251,15 +251,15 @@ orient :: proc(b: ^Builder, o: Orientation) {
 // through its lines and cubics (a raised quadratic comes back as one), then
 // closed, or ended open (`end_open`) as its row says.
 builder_add_contours :: proc(b: ^Builder, c: ^Contours, first, count: int) {
-	for ct in c.contours[first:][:count] {
-		pts := c.pts[ct.start:][:3 * ct.segs + 1]
-		move_to(b, pts[0])
-		for kind, i in c.kinds[ct.seg:][:ct.segs] {
-			s := pts[3 * i:][:4]
-			if kind == .Line {
-				line_to(b, s[3])
+	for i in first ..< first + count {
+		ct := c.contours[i]
+		move_to(b, c.pts[ct.start])
+		it := contour_segments(c, i)
+		for s in segments_next(&it) {
+			if s.kind == .Line {
+				line_to(b, s.p[3])
 			} else {
-				cubic_to(b, s[1], s[2], s[3])
+				cubic_to(b, s.p[1], s.p[2], s.p[3])
 			}
 		}
 		if ct.closed {

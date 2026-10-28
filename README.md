@@ -35,12 +35,16 @@ shapes and text in 3D.
   are `Fill_Rule` and `fill_inside` there (the same order, so a rule
   packed as 0 or 1 casts to it).
 - **Contours** (`contours.odin`): lines and cubics in one flat table (every
-  contour's points, each segment's kind, a row per contour; neighbours
-  share their end point by index), written by `contours_begin`,
-  `contours_line`, `contours_cubic`, `contours_quad` (a quadratic as the
-  cubic it is) and `contours_end`; `contours_winding` at a point and
-  `contours_area`, a contour's signed area (a line and its reverse cancel
-  exactly). `builder_add_contours` builds a shape from them.
+  contour's start point and then its segments' points, a line its end and
+  a cubic its two controls and end; each segment's kind; a row per
+  contour; neighbours share their end point by index), written by
+  `contours_begin`, `contours_line`, `contours_cubic`, `contours_quad` (a
+  quadratic as the cubic it is) and `contours_end`, copied by range
+  (`contours_append`), and read in order with `contour_segments` /
+  `segments_next`, which give each segment as the cubic it is (a line's
+  controls its thirds); `contours_winding` at a point and `contours_area`,
+  a contour's signed area (a line and its reverse cancel exactly).
+  `builder_add_contours` builds a shape from them.
 - **Fill rules**: `Fill_Rule` (non-zero, even-odd) is what coverage, the
   booleans' operands and `fill_inside` take.
 - **Booleans** (`bool.odin`, `bool_kernel.odin`): `bool_run` gives the

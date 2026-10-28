@@ -136,13 +136,16 @@ Bool_Scratch :: struct {
 	fbox:    [dynamic][2][2]f64, // per face: the box of its cycle's curves
 	cparent: [dynamic]u32, // per face of a component's outside: the face holding it
 	// bool_run: the faces' regions (a union-find); per contour of `out` its
-	// first kept face (then its region) and whether it winds as a hole; the
-	// contours' rows in region order.
-	fregion: [dynamic]u32,
-	oface:   [dynamic]u32,
-	ohole:   [dynamic]bool,
-	orows:   [dynamic]Contour,
-	stats:   Bool_Stats,
+	// first kept face (then its region) and whether it winds as a hole; its
+	// contours in region order, and `out` rebuilt in that order.
+	fregion:     [dynamic]u32,
+	oface:       [dynamic]u32,
+	ohole:       [dynamic]bool,
+	oorder:      [dynamic]u32,
+	ordered:     Contours,
+	ordered_row: [dynamic]u32,
+	ordered_t:   [dynamic][2]f32,
+	stats:       Bool_Stats,
 }
 
 Bool_Row :: struct {
@@ -228,7 +231,10 @@ bool_scratch_destroy :: proc(s: ^Bool_Scratch) {
 	delete(s.fregion)
 	delete(s.oface)
 	delete(s.ohole)
-	delete(s.orows)
+	delete(s.oorder)
+	contours_destroy(&s.ordered)
+	delete(s.ordered_row)
+	delete(s.ordered_t)
 	s^ = {}
 }
 
@@ -254,8 +260,9 @@ bool_run :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, op: Bool_
 
 // Groups s.out's contours by region: kept faces joined across an edge kept
 // on both sides, and a kept component's outside with the face holding it
-// (one face of the plane, walked as two cycles). Rows are reordered,
-// outlines first within each region; the points stay.
+// (one face of the plane, walked as two cycles). `out` is rebuilt in region
+// order, outlines first within each region, its sources with it, so its
+// rows stay in the order of its points.
 @(private = "file")
 bool_regions :: proc(s: ^Bool_Scratch) {
 	nf := len(s.farea)
@@ -298,17 +305,33 @@ bool_regions :: proc(s: ^Bool_Scratch) {
 		r.x, at = at, at + r.y
 		r.y = 0
 	}
-	resize(&s.orows, n)
+	resize(&s.oorder, n)
 	for hole in ([2]bool{false, true}) {
 		for i in 0 ..< n {
 			if s.ohole[i] == hole {
 				r := &s.faces[s.oface[i]]
-				s.orows[r.x + r.y] = s.out.contours[i]
+				s.oorder[r.x + r.y] = u32(i)
 				r.y += 1
 			}
 		}
 	}
-	copy(s.out.contours[:], s.orows[:])
+	contours_clear(&s.ordered)
+	clear(&s.ordered_row)
+	clear(&s.ordered_t)
+	reserve(&s.ordered.pts, len(s.out.pts))
+	reserve(&s.ordered.kinds, len(s.out.kinds))
+	reserve(&s.ordered.contours, n)
+	reserve(&s.ordered_row, len(s.out_row))
+	reserve(&s.ordered_t, len(s.out_t))
+	for i in s.oorder {
+		ct := s.out.contours[i]
+		contours_append(&s.ordered, &s.out, int(i), 1)
+		append(&s.ordered_row, ..s.out_row[ct.seg:][:ct.segs])
+		append(&s.ordered_t, ..s.out_t[ct.seg:][:ct.segs])
+	}
+	s.out, s.ordered = s.ordered, s.out
+	s.out_row, s.ordered_row = s.ordered_row, s.out_row
+	s.out_t, s.ordered_t = s.ordered_t, s.out_t
 }
 
 // Splits the operands into every face they make (Illustrator's divide):
@@ -527,23 +550,23 @@ bool_gather :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input) -> (ep
 		append(&s.rows, Bool_Row{{f(src[0]), f(src[1]), f(src[2]), f(src[3])}, src, row, operand, line, false})
 	}
 	for in_, k in inputs {
-		for ct in c.contours[in_.first:][:in_.count] {
+		for i in int(in_.first) ..< int(in_.first + in_.count) {
+			ct := c.contours[i]
 			if ct.segs == 0 {
 				continue
 			}
 			first := len(s.rows)
-			pts := c.pts[ct.start:][:3 * ct.segs + 1]
-			for p in pts {
+			for p in c.pts[ct.start:][:contour_points(c, i)] {
 				if math.is_nan(p.x) || math.is_nan(p.y) || math.is_inf(p.x) || math.is_inf(p.y) {
 					return 0, 0, .Non_Finite
 				}
 				M = max(M, abs(f64(p.x)), abs(f64(p.y)))
 			}
-			for i in 0 ..< ct.segs {
-				q := pts[3 * i:][:4]
-				add(s, {q[0], q[1], q[2], q[3]}, ct.seg + i, u16(k), c.kinds[ct.seg + i] == .Line)
+			it := contour_segments(c, i)
+			for sg in segments_next(&it) {
+				add(s, sg.p, u32(sg.index), u16(k), sg.kind == .Line)
 			}
-			if a, b := pts[len(pts) - 1], pts[0]; a != b {
+			if a, b := c.pts[it.at - 1], c.pts[ct.start]; a != b {
 				add(s, {a, a + (b - a) / 3, a + (b - a) * (2.0 / 3), b}, max(u32), u16(k), true)
 			}
 			if first < len(s.rows) {

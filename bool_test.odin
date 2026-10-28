@@ -306,8 +306,9 @@ test_bool_regions :: proc(t: ^testing.T) {
 			contours_reverse(c, len(c.contours) - 1)
 		}
 	}
-	square(&c, 0, 0, 10, 10, false)
+	// The hole first, so it is traced before its outline.
 	square(&c, 2, 2, 8, 8, true)
+	square(&c, 0, 0, 10, 10, false)
 	square(&c, 4, 4, 6, 6, false)
 	square(&c, 10, 10, 14, 14, false)
 	s: Bool_Scratch
@@ -328,6 +329,13 @@ test_bool_regions :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect_value(t, holes, 1)
+	// The rows are in the order of their points, so a table appended row
+	// by row keeps each segment's source (out_row, out_t) at its index.
+	for i in 1 ..< len(s.out.contours) {
+		a, b := s.out.contours[i - 1], s.out.contours[i]
+		testing.expect(t, int(b.start) == int(a.start) + contour_points(&s.out, i - 1) && b.seg == a.seg + a.segs)
+	}
+	testing.expect(t, len(s.out_row) == len(s.out.kinds) && len(s.out_t) == len(s.out.kinds))
 	// The region holding (1, 1) holds the ring's hole; (5, 5) and (12, 12)
 	// lie in regions of one contour.
 	for q in ([3][2]f64{{1, 1}, {5, 5}, {12, 12}}) {
