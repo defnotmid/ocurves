@@ -633,8 +633,24 @@ outline_lists :: proc(s: ^Scratch, pieces: []Curve, places: []Place, mono: []Cur
 // split puts it there).
 @(private = "file")
 split_monotone :: proc(c: Curve, out: ^[dynamic]Curve) {
-	ts: [2]f32
-	n := 0
+	ts, n := monotone_splits(c)
+	rest := c
+	done: f32 = 0
+	for i in 0 ..= n {
+		piece := rest
+		if i < n {
+			piece, rest = split_at(rest, (ts[i] - done) / (1 - done))
+			done = ts[i]
+		}
+		append(out, pin(piece))
+	}
+}
+
+// Where `c` turns in x or in y, inside it, in order: the parameters
+// split_monotone splits it at (and so its mono pieces, n + 1). A curve
+// folded back along itself turns in both at once: one split.
+@(private = "file")
+monotone_splits :: #force_inline proc "contextless" (c: Curve) -> (ts: [2]f32, n: int) {
 	for axis in 0 ..< 2 {
 		den := c.p1[axis] - 2 * c.p2[axis] + c.p3[axis]
 		if den != 0 {
@@ -648,31 +664,8 @@ split_monotone :: proc(c: Curve, out: ^[dynamic]Curve) {
 	if n == 2 && ts[0] > ts[1] {
 		ts[0], ts[1] = ts[1], ts[0]
 	}
-	rest := c
-	done: f32 = 0
-	for i in 0 ..= n {
-		piece := rest
-		if i < n {
-			piece, rest = split_at(rest, (ts[i] - done) / (1 - done))
-			done = ts[i]
-		}
-		append(out, pin(piece))
-	}
-}
-
-// Where `c` turns in x or in y, inside it: the parameters split_monotone
-// splits it at.
-@(private = "file")
-monotone_splits :: #force_inline proc "contextless" (c: Curve) -> (ts: [2]f32, n: int) {
-	for axis in 0 ..< 2 {
-		den := c.p1[axis] - 2 * c.p2[axis] + c.p3[axis]
-		if den != 0 {
-			t := (c.p1[axis] - c.p2[axis]) / den
-			if t > 1e-6 && t < 1 - 1e-6 {
-				ts[n] = t
-				n += 1
-			}
-		}
+	if n == 2 && ts[0] == ts[1] {
+		n = 1
 	}
 	return
 }

@@ -499,7 +499,9 @@ emit_face_reversed :: proc(s: ^Bool_Scratch, f: u32) {
 			contours_begin(&s.out, s.vout[v0])
 			begun = true
 			run_row, run_t0, run_t1, run_v0 = p.row, ta, tb, v0
-		case p.row == run_row && ta == run_t1 && (tb > ta) == (run_t1 > run_t0):
+		case p.row == run_row && ta == run_t1 && s.vstart[v0 + 1] - s.vstart[v0] == 2 && (tb > ta) == (run_t1 > run_t0):
+			// One segment's pieces join where nothing else meets them: a
+			// vertex other edges reach is a corner of every face there.
 			run_t1 = tb
 		case:
 			emit_range(s, run_row, run_t0, run_t1, run_v0, v0)

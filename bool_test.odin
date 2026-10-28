@@ -349,3 +349,38 @@ test_bool_regions :: proc(t: ^testing.T) {
 		testing.expect_value(t, n, 1)
 	}
 }
+
+// Divide's faces meet vertex to vertex: where two squares sit side by side
+// on a wider one, the point between them is a corner of all three faces,
+// though the wide one's top edge runs straight through it.
+@(test)
+test_bool_divide_shared_vertices :: proc(t: ^testing.T) {
+	c: Contours
+	defer contours_destroy(&c)
+	square :: proc(c: ^Contours, x0, y0, x1, y1: f32) {
+		contours_begin(c, {x0, y0})
+		contours_line(c, {x1, y0})
+		contours_line(c, {x1, y1})
+		contours_line(c, {x0, y1})
+		contours_end(c, true, false)
+	}
+	square(&c, 0, 10, 20, 20)
+	square(&c, 0, 0, 10, 10)
+	square(&c, 10, 0, 20, 10)
+	s: Bool_Scratch
+	defer bool_scratch_destroy(&s)
+	budget := DEFAULT_BUDGET
+	inputs := [3]Bool_Input{{0, 1, .Non_Zero}, {1, 1, .Non_Zero}, {2, 1, .Non_Zero}}
+	testing.expect_value(t, bool_divide(&s, &c, inputs[:], &budget), Bool_Error.None)
+	testing.expect_value(t, len(s.faces), 3)
+	for r in s.faces {
+		corner := false
+		for i in 0 ..< r.y {
+			ct := s.out.contours[r.x + i]
+			for p in s.out.pts[ct.start:][:contour_points(&s.out, int(r.x + i))] {
+				corner ||= p == {10, 10}
+			}
+		}
+		testing.expectf(t, corner, "a face %v lacks the shared corner (10, 10)", r)
+	}
+}

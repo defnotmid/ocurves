@@ -612,3 +612,34 @@ test_builder_add_contours :: proc(t: ^testing.T) {
 	testing.expect(t, oka && okb)
 	testing.expect(t, slice.equal(wa, wb))
 }
+
+// A curve folded back along itself turns in x and y at one parameter:
+// its pieces split there once, so the outline still hides the open
+// contour's closing edge and draws every other edge.
+@(test)
+test_hairline_folded_curve :: proc(t: ^testing.T) {
+	I :: [6]f32{1, 0, 0, 1, 0, 0}
+	for cubic in ([2]bool{false, true}) {
+		b: Builder
+		defer builder_destroy(&b)
+		b.outline = true
+		move_to(&b, {10, 10})
+		if cubic {
+			cubic_to(&b, {60, 60}, {10, 10}, {60, 60})
+			line_to(&b, {10, 10})
+		} else {
+			quad_to(&b, {60, 60}, {10, 10})
+		}
+		line_to(&b, {90, 10})
+		line_to(&b, {90, 50})
+		// Closed by the line from (90, 50) back to (10, 10), not drawn.
+		end_open(&b)
+		words, origin, extent, ok := build(&b)
+		testing.expect(t, ok)
+		defer delete(words)
+		testing.expectf(t, hairline_at(words, origin, extent, I, 69.5, 39.5, 1) == 0, "cubic %v: the closing edge is drawn", cubic)
+		for q in ([3]Vec2{{49.5, 9.5}, {89.5, 29.5}, {19.5, 19.5}}) {
+			testing.expectf(t, hairline_at(words, origin, extent, I, q.x, q.y, 1) > 0.5, "cubic %v: the edge at %v is hidden", cubic, q)
+		}
+	}
+}
