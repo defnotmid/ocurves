@@ -31,7 +31,9 @@ shapes and text in 3D.
 - **The GPU twin** (`curves.slang`): the same reads in Slang, for a shader
   to include (`slangc -I <this checkout>`, `#include "curves.slang"`); it
   binds nothing, and reads any number of shapes from one
-  `StructuredBuffer<uint>`.
+  `StructuredBuffer<uint>`. `Curves_Fill_Rule` and `curves_fill_inside`
+  are `Fill_Rule` and `fill_inside` there (the same order, so a rule
+  packed as 0 or 1 casts to it).
 - **Contours** (`contours.odin`): lines and cubics in one flat table (every
   contour's points, each segment's kind, a row per contour; neighbours
   share their end point by index), written by `contours_begin`,

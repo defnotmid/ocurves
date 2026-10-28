@@ -96,9 +96,20 @@ float curves_area_term(float gp, float gq, float gr, float yd, float ye, float t
     return g1 - g0;
 }
 
-float curves_fill(float area, bool even_odd) {
+// How a fill reads winding numbers (curves.Fill_Rule, in its order): inside
+// where the winding is non-zero, or where it is odd.
+enum Curves_Fill_Rule {
+    Non_Zero,
+    Even_Odd,
+};
+
+bool curves_fill_inside(int w, Curves_Fill_Rule rule) {
+    return rule == Curves_Fill_Rule.Even_Odd ? (w & 1) != 0 : w != 0;
+}
+
+float curves_fill(float area, Curves_Fill_Rule rule) {
     float cov = abs(area);
-    if (even_odd) {
+    if (rule == Curves_Fill_Rule.Even_Odd) {
         return 1.0 - abs(1.0 - (cov * 0.5 - floor(cov * 0.5)) * 2.0);
     }
     return min(cov, 1.0);
@@ -174,7 +185,7 @@ float curves_box_curve(StructuredBuffer<uint> words, uint c, float2 rc, float ca
 // Its cells' pieces wholly right of it are summed as found and the few
 // crossing it kept, integrated after: pixels running together then
 // integrate together instead of each stalling the others' scans.
-float curves_coverage(StructuredBuffer<uint> words, uint s, float2 rc, float2 footprint, bool even_odd) {
+float curves_coverage(StructuredBuffer<uint> words, uint s, float2 rc, float2 footprint, Curves_Fill_Rule rule) {
     float fx = footprint.x;
     float fy = footprint.y;
     if (fx <= 0.0 || fy <= 0.0) return 0.0;
@@ -221,7 +232,7 @@ float curves_coverage(StructuredBuffer<uint> words, uint s, float2 rc, float2 fo
     for (int i = 0; i < n; i++) {
         area += curves_box_curve(words, kept[i], rc, kept_a[i], kept_b[i], x0, x1);
     }
-    return curves_fill(area / (fx * fy), even_odd);
+    return curves_fill(area / (fx * fy), rule);
 }
 
 // A pixel's parallelogram footprint centered on the origin (see Footprint
@@ -397,9 +408,9 @@ float curves_affine_curve(StructuredBuffer<uint> words, uint c, float2 rc, Curve
 
 // Exact coverage of the parallelogram rc + a u + b v, a, b in [-1/2, 1/2]
 // (u, v: ddx(rc), ddy(rc), or the inverse transform's columns).
-float curves_coverage_affine(StructuredBuffer<uint> words, uint s, float2 rc, float2 u, float2 v, bool even_odd) {
+float curves_coverage_affine(StructuredBuffer<uint> words, uint s, float2 rc, float2 u, float2 v, Curves_Fill_Rule rule) {
     if (u.y == 0.0 && v.x == 0.0) {
-        return curves_coverage(words, s, rc, float2(abs(u.x), abs(v.y)), even_odd);
+        return curves_coverage(words, s, rc, float2(abs(u.x), abs(v.y)), rule);
     }
     Curves_Footprint fp;
     if (!curves_footprint_parallelogram(u, v, fp)) return 0.0;
@@ -444,7 +455,7 @@ float curves_coverage_affine(StructuredBuffer<uint> words, uint s, float2 rc, fl
     for (int i = 0; i < n; i++) {
         area += curves_affine_curve(words, kept[i], rc, fp, kept_a[i], kept_b[i]);
     }
-    return curves_fill(area / (fp.width * (fp.h0 + fp.h1)), even_odd);
+    return curves_fill(area / (fp.width * (fp.h0 + fp.h1)), rule);
 }
 
 // The per-axis extent of the footprint from the shape coordinate's screen

@@ -133,6 +133,7 @@ Bool_Scratch :: struct {
 	faces:    [dynamic][2]u32,
 	faces_in: [dynamic]bool,
 	fcomp:   [dynamic]u32, // per face: its component
+	fbox:    [dynamic][2][2]f64, // per face: the box of its cycle's curves
 	cparent: [dynamic]u32, // per face of a component's outside: the face holding it
 	// bool_run: the faces' regions (a union-find); per contour of `out` its
 	// first kept face (then its region) and whether it winds as a hole; the
@@ -223,6 +224,7 @@ bool_scratch_destroy :: proc(s: ^Bool_Scratch) {
 	delete(s.faces_in)
 	delete(s.fcomp)
 	delete(s.cparent)
+	delete(s.fbox)
 	delete(s.fregion)
 	delete(s.oface)
 	delete(s.ohole)
@@ -269,7 +271,8 @@ bool_regions :: proc(s: ^Bool_Scratch) {
 	face_components(s)
 	for f in 0 ..< nf {
 		if s.farea[f] < 0 && s.inside[f] {
-			if g := face_holder(s, f); g != max(u32) {
+			// Its holder is the same face of the plane, so kept too.
+			if g := face_holder(s, f, true); g != max(u32) {
 				unite(s.fregion[:], u32(f), g)
 			}
 		}
@@ -325,7 +328,7 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 	slice.fill(s.cparent[:], max(u32))
 	for f in 0 ..< nf {
 		if s.farea[f] < 0 {
-			s.cparent[f] = face_holder(s, f)
+			s.cparent[f] = face_holder(s, f, false)
 		}
 	}
 	// The regions, in face order.
@@ -355,38 +358,51 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 	return
 }
 
-// Each face's component (s.fcomp).
+// Each face's component (s.fcomp) and the box of its cycle (s.fbox).
 @(private = "file")
 face_components :: proc(s: ^Bool_Scratch) {
 	resize(&s.fcomp, len(s.farea))
+	resize(&s.fbox, len(s.farea))
+	slice.fill(s.fbox[:], [2][2]f64{{math.INF_F64, math.INF_F64}, {-math.INF_F64, -math.INF_F64}})
 	for e, i in s.edges {
 		if e.alive {
 			r := find(s.comp[:], e.v0)
-			s.fcomp[s.hface[2 * i]], s.fcomp[s.hface[2 * i + 1]] = r, r
+			lo, hi := box_of(s.ecurve[i])
+			for f in ([2]u32{s.hface[2 * i], s.hface[2 * i + 1]}) {
+				s.fcomp[f] = r
+				b := &s.fbox[f]
+				b[0] = {min(b[0].x, lo.x), min(b[0].y, lo.y)}
+				b[1] = {max(b[1].x, hi.x), max(b[1].y, hi.y)}
+			}
 		}
 	}
 }
 
 // The face holding face f, a component's outside: the smallest bounded
-// face of another component winding about the component's leftmost vertex;
-// max(u32) when none does (the unbounded face).
+// face of another component winding about the component's leftmost vertex
+// (one whose box holds it; with `kept`, a kept one); max(u32) when none
+// does (the unbounded face).
 @(private = "file")
-face_holder :: proc(s: ^Bool_Scratch, f: int) -> (holder: u32) {
+face_holder :: proc(s: ^Bool_Scratch, f: int, kept: bool) -> (holder: u32) {
 	holder = max(u32)
 	lv := s.cleft[s.fcomp[f]]
+	q := s.vpos[lv]
 	best := math.INF_F64
 	for g in 0 ..< len(s.farea) {
-		if s.farea[g] <= 0 || s.fcomp[g] == s.fcomp[f] || s.farea[g] >= best {
+		if s.farea[g] <= 0 || s.fcomp[g] == s.fcomp[f] || s.farea[g] >= best || (kept && !s.inside[g]) {
+			continue
+		}
+		if b := s.fbox[g]; q.x < b[0].x || q.x > b[1].x || q.y < b[0].y || q.y > b[1].y {
 			continue
 		}
 		w: i32
 		h := s.fhalf[g]
 		for {
-			q := s.ecurve[h >> 1]
+			c := s.ecurve[h >> 1]
 			if h & 1 == 1 {
-				q = {q[3], q[2], q[1], q[0]}
+				c = {c[3], c[2], c[1], c[0]}
 			}
-			cw, _ := curve_winding(q, s.vpos[lv], 0, &s.stack)
+			cw, _ := curve_winding(c, q, 0, &s.stack)
 			w += cw
 			h = s.hnext[h]
 			if h == s.fhalf[g] {
