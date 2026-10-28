@@ -149,8 +149,10 @@ kernel_scratch_destroy :: proc(s: ^Kernel_Scratch) {
 // pair of points closer than tol - delta lies in a run, and every leaf of
 // the search found its pairs within tol + delta. Cell pairs are halved
 // until both are flat, then compared as segments in closed form; a pair is
-// dropped only when its boxes are proved farther apart than tol, so no
-// crossing is missed whatever the rounding. The search covers `root` (s0,
+// dropped only when its boxes are proved farther apart than tol, or one
+// cell is flat and the other's box lies past tol of its chord's line (a
+// flat cell is no longer halved, so its chord is all it is compared as),
+// so no crossing is missed whatever the rounding. The search covers `root` (s0,
 // s1 of a, t0, t1 of b): a caller that knows every near pair lies there
 // skips the rest. `budget` counts cell pairs (false when it runs out).
 near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dynamic]Run, budget: ^int, root := [4]f64{0, 1, 0, 1}) -> bool {
@@ -174,6 +176,9 @@ near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dyna
 		}
 		fa := a.line || chord_flat(pa, flat)
 		fb := b.line || chord_flat(pb, flat)
+		if fa != fb && (beyond_line(pa[0], pa[3], blo, bhi, reach) if fa else beyond_line(pb[0], pb[3], alo, ahi, reach)) {
+			continue
+		}
 		if fa && fb {
 			u0, u1, v0, v1, near := segments_near(pa[0], pa[3], pb[0], pb[3], tol)
 			if near {
@@ -311,6 +316,27 @@ capsule_range :: proc "contextless" (a0, a1, b0, b1: [2]f64, tol: f64) -> (lo, h
 	}
 	lo, hi = max(lo, 0), min(hi, 1)
 	return lo, hi, lo <= hi
+}
+
+// Whether box lo..hi lies wholly on one side of the line through p and q,
+// farther than r from it, with the f64 rounding of the test allowed for:
+// the corners' cross products with the direction (of size up to 8 m^2 for
+// coordinates up to m) are off by less than 2^-47 m^2 < 1e-14 m^2.
+@(private = "file")
+beyond_line :: proc "contextless" (p, q, lo, hi: [2]f64, r: f64) -> bool {
+	d := q - p
+	l := length(d)
+	if l == 0 {
+		return false
+	}
+	m := max(abs(p.x), abs(p.y), abs(q.x), abs(q.y), abs(lo.x), abs(lo.y), abs(hi.x), abs(hi.y))
+	slack := r * l * (1 + 1e-12) + 1e-14 * m * m
+	c_lo, c_hi := math.INF_F64, -math.INF_F64
+	for c in ([4][2]f64{lo, {hi.x, lo.y}, hi, {lo.x, hi.y}}) {
+		v := (c.x - p.x) * d.y - (c.y - p.y) * d.x
+		c_lo, c_hi = min(c_lo, v), max(c_hi, v)
+	}
+	return c_lo > slack || c_hi < -slack
 }
 
 @(private = "file")

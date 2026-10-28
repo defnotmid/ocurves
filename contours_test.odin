@@ -18,22 +18,42 @@ test_contours_area_and_reverse :: proc(t: ^testing.T) {
 	contours_line(&c, {0, -r})
 	contours_line(&c, {r, 0})
 	contours_end(&c, true, false)
-	area :: proc(c: ^Contours) -> f64 {
-		a: f64
-		ct := c.contours[0]
-		for s in 0 ..< ct.segs {
-			q := c.pts[ct.start + 3 * s:][:4]
-			a += cubic_area([4][2]f64{{f64(q[0].x), f64(q[0].y)}, {f64(q[1].x), f64(q[1].y)}, {f64(q[2].x), f64(q[2].y)}, {f64(q[3].x), f64(q[3].y)}})
-		}
-		return a
-	}
 	// Half a circle plus the triangle under the two lines.
 	want := f64(math.PI) * 100 / 2 + 100
-	a := area(&c)
+	a := contours_area(&c, 0)
 	testing.expectf(t, abs(abs(a) - want) < 0.05, "area %v, want %v", a, want)
 	contours_reverse(&c, 0)
-	testing.expect(t, abs(area(&c) + a) < 1e-9)
+	testing.expect(t, abs(contours_area(&c, 0) + a) < 1e-9)
 	testing.expect_value(t, c.kinds[0], Seg_Kind.Line)
 	testing.expect_value(t, c.kinds[3], Seg_Kind.Cubic)
 	testing.expect_value(t, c.pts[0], Vec2{r, 0})
+}
+
+// A line out and back encloses nothing, exactly, at any coordinates; an
+// open contour counts its closing line. A quadratic is stored as the cubic
+// it is.
+@(test)
+test_contours_area_exact_and_quad :: proc(t: ^testing.T) {
+	c: Contours
+	defer contours_destroy(&c)
+	contours_begin(&c, {1e-3, 7.1})
+	contours_line(&c, {3e4, -0.3})
+	contours_line(&c, {1e-3, 7.1})
+	contours_end(&c, true, false)
+	testing.expect_value(t, contours_area(&c, 0), 0)
+	contours_begin(&c, {0, 0})
+	contours_line(&c, {4, 0})
+	contours_line(&c, {4, 4})
+	contours_end(&c, false, false)
+	testing.expect_value(t, contours_area(&c, 1), -8)
+	contours_begin(&c, {0, 0})
+	contours_quad(&c, {3, 6}, {6, 0})
+	contours_end(&c, false, false)
+	testing.expect_value(t, c.kinds[len(c.kinds) - 1], Seg_Kind.Cubic)
+	q := cubic_from_quad(Vec2{0, 0}, Vec2{3, 6}, Vec2{6, 0})
+	testing.expect_value(t, c.pts[len(c.pts) - 3], q[1])
+	testing.expect_value(t, c.pts[len(c.pts) - 2], q[2])
+	testing.expect_value(t, c.pts[len(c.pts) - 1], q[3])
+	// Between the parabola (peaking at y = 3) and its chord: 2/3 of 6 x 3.
+	testing.expect(t, abs(abs(contours_area(&c, 2)) - 12) < 1e-4)
 }

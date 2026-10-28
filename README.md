@@ -34,7 +34,13 @@ shapes and text in 3D.
   `StructuredBuffer<uint>`.
 - **Contours** (`contours.odin`): lines and cubics in one flat table (every
   contour's points, each segment's kind, a row per contour; neighbours
-  share their end point by index) and `contours_winding` at a point.
+  share their end point by index), written by `contours_begin`,
+  `contours_line`, `contours_cubic`, `contours_quad` (a quadratic as the
+  cubic it is) and `contours_end`; `contours_winding` at a point and
+  `contours_area`, a contour's signed area (a line and its reverse cancel
+  exactly). `builder_add_contours` builds a shape from them.
+- **Fill rules**: `Fill_Rule` (non-zero, even-odd) is what coverage, the
+  booleans' operands and `fill_inside` take.
 - **Booleans** (`bool.odin`, `bool_kernel.odin`): `bool_run` gives the
   union, difference, intersection or xor of any number of operands (ranges
   of a `Contours` table, each with its fill rule; one operand simplifies),
@@ -42,17 +48,24 @@ shapes and text in 3D.
   inside. The result keeps the operands' own curves: each output segment
   is a range of an input line or cubic, cut where the operands meet, and
   the scratch records where each came from. Output contours are
-  Solid-wound with holes reversed and never cross. One arrangement of every
+  Solid-wound with holes reversed and never cross, each one boundary, and
+  `faces` groups them by region (`bool_run`: the parts of the result joined
+  across curves; `bool_divide`: each face), its outline first, then its
+  holes. One arrangement of every
   operand's pieces in f64: pieces are cut wherever two come within eps = 8
   f32 ulps of the largest coordinate (a near-set search that drops a pair
   only once it has proved them farther apart), cut points within eps merge
   into vertices, edges along the same curve between the same vertices
   merge with their windings summed, faces are walked and each face's
   winding per operand propagated. Every table is the caller's
-  `Bool_Scratch`: no allocation once it is warm.
+  `Bool_Scratch`: no allocation once it is warm. The work is bounded by a
+  budget (`DEFAULT_BUDGET`, 4,000,000 kernel cell pairs and snap-round
+  points) against degenerate input; every glyph of Bitstream Vera (264)
+  and Adwaita Sans (2,915), simplified, takes at most 268 and 8,549.
 - **Cubics** (`cubic.odin`): a cubic's point at t, sub-range, extrema,
-  bounds, signed area and its split into quadratics within a tolerance, for
-  f32 and f64 points alike.
+  bounds, signed area, its split into quadratics within a tolerance and
+  the cubic a quadratic is (`cubic_from_quad`), for f32 and f64 points
+  alike.
 
 ## The format
 
@@ -83,7 +96,7 @@ defer delete(words)
 // The coverage of a pixel at p (source units) with sides of 1 unit: shape
 // units are the source's divided by extent, starting at origin.
 p := [2]f32{4.5, 4.5}
-cov := cv.coverage(words, (p - origin) / extent, {1, 1} / extent, false)
+cov := cv.coverage(words, (p - origin) / extent, {1, 1} / extent, .Non_Zero)
 ```
 
 ## Test

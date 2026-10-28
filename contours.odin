@@ -63,6 +63,13 @@ contours_cubic :: proc(c: ^Contours, c1, c2, p: Vec2) {
 	contours_segment(c, .Cubic, c1, c2, p)
 }
 
+// Appends the quadratic with control `ctrl` ending at p, as the cubic it is
+// (cubic_from_quad; a Builder's cubic_to gets the quadratic back).
+contours_quad :: proc(c: ^Contours, ctrl, p: Vec2) {
+	q := cubic_from_quad(c.pts[len(c.pts) - 1], ctrl, p)
+	contours_segment(c, .Cubic, q[1], q[2], q[3])
+}
+
 contours_line :: proc(c: ^Contours, p: Vec2) {
 	a := c.pts[len(c.pts) - 1]
 	contours_segment(c, .Line, a + (p - a) / 3, a + (p - a) * (2.0 / 3), p)
@@ -96,6 +103,32 @@ contours_winding :: proc(c: ^Contours, first, count: int, q: [2]f64, stack: ^[dy
 			w += cw
 			on ||= con
 		}
+	}
+	return
+}
+
+// The signed area contour i encloses, closed by a line when open: positive
+// when it winds Solid (orient's sign). A line counts by its ends, so a line
+// and its reverse cancel exactly; a cubic by cubic_area.
+contours_area :: proc(c: ^Contours, i: int) -> (area: f64) {
+	f :: #force_inline proc "contextless" (v: Vec2) -> [2]f64 {
+		return {f64(v.x), f64(v.y)}
+	}
+	line :: #force_inline proc "contextless" (a, b: [2]f64) -> f64 {
+		return (b.x - a.x) * (a.y + b.y) / 2
+	}
+	ct := c.contours[i]
+	pts := c.pts[ct.start:][:3 * ct.segs + 1]
+	for kind, k in c.kinds[ct.seg:][:ct.segs] {
+		s := pts[3 * k:][:4]
+		if kind == .Line {
+			area += line(f(s[0]), f(s[3]))
+		} else {
+			area += cubic_area([4][2]f64{f(s[0]), f(s[1]), f(s[2]), f(s[3])})
+		}
+	}
+	if a, b := pts[len(pts) - 1], pts[0]; a != b {
+		area += line(f(a), f(b))
 	}
 	return
 }

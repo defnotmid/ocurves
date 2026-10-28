@@ -247,6 +247,29 @@ orient :: proc(b: ^Builder, o: Orientation) {
 	}
 }
 
+// Adds contours [first, first + count) of `c`: each from its start point
+// through its lines and cubics (a raised quadratic comes back as one), then
+// closed, or ended open (`end_open`) as its row says.
+builder_add_contours :: proc(b: ^Builder, c: ^Contours, first, count: int) {
+	for ct in c.contours[first:][:count] {
+		pts := c.pts[ct.start:][:3 * ct.segs + 1]
+		move_to(b, pts[0])
+		for kind, i in c.kinds[ct.seg:][:ct.segs] {
+			s := pts[3 * i:][:4]
+			if kind == .Line {
+				line_to(b, s[3])
+			} else {
+				cubic_to(b, s[1], s[2], s[3])
+			}
+		}
+		if ct.closed {
+			close(b)
+		} else {
+			end_open(b)
+		}
+	}
+}
+
 // The shape's words from the builder's curves (closing the open contour),
 // with the map back to source units: `p = origin + q * extent`. False (no
 // words) when there are no curves or they span nothing. `search` tries grid
@@ -827,9 +850,9 @@ area_term :: #force_inline proc "contextless" (gp, gq, gr, yd, ye, t0, t1: f32) 
 
 // The fill rule applied to `area`, the footprint's signed covered fraction.
 @(private)
-fill :: #force_inline proc "contextless" (area: f32, even_odd: bool) -> f32 {
+fill :: #force_inline proc "contextless" (area: f32, rule: Fill_Rule) -> f32 {
 	cov := abs(area)
-	if even_odd {
+	if rule == .Even_Odd {
 		return 1 - abs(1 - (cov * 0.5 - math.floor(cov * 0.5)) * 2)
 	}
 	return min(cov, 1)
@@ -838,7 +861,7 @@ fill :: #force_inline proc "contextless" (area: f32, even_odd: bool) -> f32 {
 // Exact coverage of the axis-aligned box `footprint` (shape units) centered
 // at `rc`: a pixel under a transform without rotation or skew
 // (`coverage_affine` for the others).
-coverage :: proc "contextless" (s: []u32, rc: Vec2, footprint: Vec2, even_odd: bool) -> f32 {
+coverage :: proc "contextless" (s: []u32, rc: Vec2, footprint: Vec2, rule: Fill_Rule) -> f32 {
 	fx, fy := footprint.x, footprint.y
 	if fx <= 0 || fy <= 0 {
 		return 0
@@ -860,7 +883,7 @@ coverage :: proc "contextless" (s: []u32, rc: Vec2, footprint: Vec2, even_odd: b
 		}
 		area += backdrop_integral(s, HEADER + 4 * u32(j * g.nx + g.i1), rc.y, max(ylo, rlo), min(yhi, rhi), nil, fx)
 	}
-	return fill(area / (fx * fy), even_odd)
+	return fill(area / (fx * fy), rule)
 }
 
 // The cells a footprint covers: columns i0..i1 and rows j0..j1, clamped to
@@ -972,9 +995,9 @@ box_piece :: #force_inline proc "contextless" (q: Quadratic, x0, x1, t0, t1: f32
 // a pixel whose sides map to `u` and `v` in shape units (the shape
 // coordinate's derivatives along the pixel's x and y), under any affine
 // transform or a 3D one's local Jacobian.
-coverage_affine :: proc "contextless" (s: []u32, rc: Vec2, u, v: Vec2, even_odd: bool) -> f32 {
+coverage_affine :: proc "contextless" (s: []u32, rc: Vec2, u, v: Vec2, rule: Fill_Rule) -> f32 {
 	if u.y == 0 && v.x == 0 {
-		return coverage(s, rc, {abs(u.x), abs(v.y)}, even_odd)
+		return coverage(s, rc, {abs(u.x), abs(v.y)}, rule)
 	}
 	fp, ok := footprint_parallelogram(u, v)
 	if !ok {
@@ -996,7 +1019,7 @@ coverage_affine :: proc "contextless" (s: []u32, rc: Vec2, u, v: Vec2, even_odd:
 		}
 		area += backdrop_integral(s, HEADER + 4 * u32(j * g.nx + g.i1), rc.y, max(ylo, rlo), min(yhi, rhi), &fp, 0)
 	}
-	return fill(area / (fp.width * (fp.h0 + fp.h1)), even_odd)
+	return fill(area / (fp.width * (fp.h0 + fp.h1)), rule)
 }
 
 // The area the piece at word `c` adds to the footprint over rows [ylo,
@@ -1215,8 +1238,8 @@ footprint_of :: proc "contextless" (j: matrix[2, 2]f32) -> Vec2 {
 
 // `coverage_affine` with the footprint from `j`, the Jacobian of shape units
 // by pixel coordinates (`j[0, 1]` = d shape.x / d pixel.y).
-coverage_jacobian :: proc "contextless" (s: []u32, rc: Vec2, j: matrix[2, 2]f32, even_odd: bool) -> f32 {
-	return coverage_affine(s, rc, {j[0, 0], j[1, 0]}, {j[0, 1], j[1, 1]}, even_odd)
+coverage_jacobian :: proc "contextless" (s: []u32, rc: Vec2, j: matrix[2, 2]f32, rule: Fill_Rule) -> f32 {
+	return coverage_affine(s, rc, {j[0, 0], j[1, 0]}, {j[0, 1], j[1, 1]}, rule)
 }
 
 // `cov` blended toward the shape's mean coverage as the footprint grows

@@ -39,6 +39,12 @@ Bool_Op :: enum u8 {
 	Xor,
 }
 
+// The work budget bool_run and bool_divide are given by default (kernel cell
+// pairs and the points of snap rounds): what it bounds is degenerate input,
+// such as long curves that nearly coincide, whose cost no input size
+// bounds.
+DEFAULT_BUDGET :: 4_000_000
+
 Bool_Error :: enum u8 {
 	None,
 	Non_Finite,
@@ -53,7 +59,7 @@ Bool_Error :: enum u8 {
 // by its rule. Open contours close with a line, as fills do.
 Bool_Input :: struct {
 	first, count: u32,
-	even_odd:     bool,
+	rule:         Fill_Rule,
 }
 
 // What a run did, for tests.
@@ -120,12 +126,21 @@ Bool_Scratch :: struct {
 	out:     Contours,
 	out_row: [dynamic]u32,
 	out_t:   [dynamic][2]f32,
-	// bool_divide: each region's contours in `out` (first, count), and
-	// whether it lies inside each operand under its rule (k per region).
+	// Each region's contours in `out` (first, count), its Solid outline first
+	// and then its holes: bool_run's connected regions of the result,
+	// bool_divide's faces. faces_in (bool_divide): whether each region lies
+	// inside each operand under its rule (k per region).
 	faces:    [dynamic][2]u32,
 	faces_in: [dynamic]bool,
 	fcomp:   [dynamic]u32, // per face: its component
 	cparent: [dynamic]u32, // per face of a component's outside: the face holding it
+	// bool_run: the faces' regions (a union-find); per contour of `out` its
+	// first kept face (then its region) and whether it winds as a hole; the
+	// contours' rows in region order.
+	fregion: [dynamic]u32,
+	oface:   [dynamic]u32,
+	ohole:   [dynamic]bool,
+	orows:   [dynamic]Contour,
 	stats:   Bool_Stats,
 }
 
@@ -208,13 +223,20 @@ bool_scratch_destroy :: proc(s: ^Bool_Scratch) {
 	delete(s.faces_in)
 	delete(s.fcomp)
 	delete(s.cparent)
+	delete(s.fregion)
+	delete(s.oface)
+	delete(s.ohole)
+	delete(s.orows)
 	s^ = {}
 }
 
 // Runs `op` over the operands `inputs` of table `c`; the result is in
 // s.out, Solid-wound with holes reversed and no contour crossing another,
-// so either fill rule fills it alike. `budget` bounds the work (kernel cell
-// pairs and snap rounds). On an error s.out is empty.
+// so either fill rule fills it alike, each contour one boundary of the
+// result. s.faces groups the contours by connected region (the parts of the
+// result joined across curves, not just at points): its outline first,
+// then its holes. `budget` bounds the work (kernel cell pairs and snap
+// rounds; DEFAULT_BUDGET). On an error s.out is empty.
 bool_run :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, op: Bool_Op, budget: ^int) -> (err: Bool_Error) {
 	if !(bool_arrange(s, c, inputs, budget) or_return) {
 		return
@@ -224,7 +246,66 @@ bool_run :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, op: Bool_
 		s.inside[f] = bool_inside(s.fwind[f * k:][:k], inputs, op)
 	}
 	bool_emit(s)
+	bool_regions(s)
 	return
+}
+
+// Groups s.out's contours by region: kept faces joined across an edge kept
+// on both sides, and a kept component's outside with the face holding it
+// (one face of the plane, walked as two cycles). Rows are reordered,
+// outlines first within each region; the points stay.
+@(private = "file")
+bool_regions :: proc(s: ^Bool_Scratch) {
+	nf := len(s.farea)
+	resize(&s.fregion, nf)
+	for &r, f in s.fregion {
+		r = u32(f)
+	}
+	for e, i in s.edges {
+		if e.alive && s.inside[s.hface[2 * i]] && s.inside[s.hface[2 * i + 1]] {
+			unite(s.fregion[:], s.hface[2 * i], s.hface[2 * i + 1])
+		}
+	}
+	face_components(s)
+	for f in 0 ..< nf {
+		if s.farea[f] < 0 && s.inside[f] {
+			if g := face_holder(s, f); g != max(u32) {
+				unite(s.fregion[:], u32(f), g)
+			}
+		}
+	}
+	// Each face its region's index, regions numbered in the order their
+	// first contour was traced; then each region's contour count, its
+	// start, and its contours placed: outlines, then holes.
+	n := len(s.out.contours)
+	resize(&s.counts, nf)
+	slice.fill(s.counts[:], max(u32))
+	index := s.counts[:]
+	for i in 0 ..< n {
+		root := find(s.fregion[:], s.oface[i])
+		if index[root] == max(u32) {
+			index[root] = u32(len(s.faces))
+			append(&s.faces, [2]u32{0, 0})
+		}
+		s.oface[i] = index[root]
+		s.faces[index[root]].y += 1
+	}
+	at := u32(0)
+	for &r in s.faces {
+		r.x, at = at, at + r.y
+		r.y = 0
+	}
+	resize(&s.orows, n)
+	for hole in ([2]bool{false, true}) {
+		for i in 0 ..< n {
+			if s.ohole[i] == hole {
+				r := &s.faces[s.oface[i]]
+				s.orows[r.x + r.y] = s.out.contours[i]
+				r.y += 1
+			}
+		}
+	}
+	copy(s.out.contours[:], s.orows[:])
 }
 
 // Splits the operands into every face they make (Illustrator's divide):
@@ -233,52 +314,18 @@ bool_run :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, op: Bool_
 // as holes, curves kept as bool_run keeps them. s.faces holds each
 // region's contours in s.out, s.faces_in the operands it lies inside.
 bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget: ^int) -> (err: Bool_Error) {
-	clear(&s.faces)
-	clear(&s.faces_in)
 	if !(bool_arrange(s, c, inputs, budget) or_return) {
 		return
 	}
 	k := len(inputs)
 	nf := len(s.farea)
-	// Each face's component, and the face holding each component's
-	// outside: the smallest bounded face of another component winding
-	// about its leftmost vertex.
-	resize(&s.fcomp, nf)
-	for e, i in s.edges {
-		if e.alive {
-			r := find(s.comp[:], e.v0)
-			s.fcomp[s.hface[2 * i]], s.fcomp[s.hface[2 * i + 1]] = r, r
-		}
-	}
+	// The face holding each component's outside.
+	face_components(s)
 	resize(&s.cparent, nf)
 	slice.fill(s.cparent[:], max(u32))
 	for f in 0 ..< nf {
-		if s.farea[f] >= 0 {
-			continue
-		}
-		lv := s.cleft[s.fcomp[f]]
-		best := math.INF_F64
-		for g in 0 ..< nf {
-			if s.farea[g] <= 0 || s.fcomp[g] == s.fcomp[f] || s.farea[g] >= best {
-				continue
-			}
-			w: i32
-			h := s.fhalf[g]
-			for {
-				q := s.ecurve[h >> 1]
-				if h & 1 == 1 {
-					q = {q[3], q[2], q[1], q[0]}
-				}
-				cw, _ := curve_winding(q, s.vpos[lv], 0, &s.stack)
-				w += cw
-				h = s.hnext[h]
-				if h == s.fhalf[g] {
-					break
-				}
-			}
-			if w != 0 {
-				best, s.cparent[f] = s.farea[g], u32(g)
-			}
+		if s.farea[f] < 0 {
+			s.cparent[f] = face_holder(s, f)
 		}
 	}
 	// The regions, in face order.
@@ -288,7 +335,7 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 		}
 		any := false
 		for o in 0 ..< k {
-			any ||= fill_inside(s.fwind[f * k + o], inputs[o].even_odd)
+			any ||= fill_inside(s.fwind[f * k + o], inputs[o].rule)
 		}
 		if !any {
 			continue
@@ -302,7 +349,52 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 		}
 		append(&s.faces, [2]u32{first, u32(len(s.out.contours)) - first})
 		for o in 0 ..< k {
-			append(&s.faces_in, fill_inside(s.fwind[f * k + o], inputs[o].even_odd))
+			append(&s.faces_in, fill_inside(s.fwind[f * k + o], inputs[o].rule))
+		}
+	}
+	return
+}
+
+// Each face's component (s.fcomp).
+@(private = "file")
+face_components :: proc(s: ^Bool_Scratch) {
+	resize(&s.fcomp, len(s.farea))
+	for e, i in s.edges {
+		if e.alive {
+			r := find(s.comp[:], e.v0)
+			s.fcomp[s.hface[2 * i]], s.fcomp[s.hface[2 * i + 1]] = r, r
+		}
+	}
+}
+
+// The face holding face f, a component's outside: the smallest bounded
+// face of another component winding about the component's leftmost vertex;
+// max(u32) when none does (the unbounded face).
+@(private = "file")
+face_holder :: proc(s: ^Bool_Scratch, f: int) -> (holder: u32) {
+	holder = max(u32)
+	lv := s.cleft[s.fcomp[f]]
+	best := math.INF_F64
+	for g in 0 ..< len(s.farea) {
+		if s.farea[g] <= 0 || s.fcomp[g] == s.fcomp[f] || s.farea[g] >= best {
+			continue
+		}
+		w: i32
+		h := s.fhalf[g]
+		for {
+			q := s.ecurve[h >> 1]
+			if h & 1 == 1 {
+				q = {q[3], q[2], q[1], q[0]}
+			}
+			cw, _ := curve_winding(q, s.vpos[lv], 0, &s.stack)
+			w += cw
+			h = s.hnext[h]
+			if h == s.fhalf[g] {
+				break
+			}
+		}
+		if w != 0 {
+			best, holder = s.farea[g], u32(g)
 		}
 	}
 	return
@@ -315,6 +407,8 @@ bool_arrange :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budge
 	contours_clear(&s.out)
 	clear(&s.out_row)
 	clear(&s.out_t)
+	clear(&s.faces)
+	clear(&s.faces_in)
 	s.stats = {}
 	k := len(inputs)
 	if k == 0 {
@@ -383,7 +477,7 @@ bool_inside :: proc(w: []i32, inputs: []Bool_Input, op: Bool_Op) -> bool {
 	n := 0
 	first := false
 	for x, i in w {
-		if fill_inside(x, inputs[i].even_odd) {
+		if fill_inside(x, inputs[i].rule) {
 			n += 1
 			first ||= i == 0
 		}
@@ -1619,9 +1713,13 @@ bool_windings :: proc(s: ^Bool_Scratch, k: int, eps: f64) -> Bool_Error {
 
 // S8: the half-edges with a kept face on their right and a dropped one on
 // their left, traced into contours (so outer contours wind Solid and holes
-// the other way); consecutive pieces of one source segment through
-// vertices of two kept edges join back into one range of it, and a range
-// covering its whole segment copies the source points.
+// the other way), one per boundary cycle; consecutive pieces of one source
+// segment through vertices of two kept edges join back into one range of
+// it, and a range covering its whole segment copies the source points. A
+// contour enclosing nothing as emitted (a sliver narrower than the f32
+// points can hold, its sides one line both ways) is dropped. Per contour,
+// its first half-edge's kept face and whether it winds as a hole (the sign
+// of its area as emitted) go to s.oface and s.ohole.
 @(private = "file")
 bool_emit :: proc(s: ^Bool_Scratch) {
 	ne := len(s.edges)
@@ -1643,12 +1741,17 @@ bool_emit :: proc(s: ^Bool_Scratch) {
 			}
 		}
 	}
+	clear(&s.oface)
+	clear(&s.ohole)
 	for h0 in 0 ..< 2 * ne {
 		if !s.keep[h0] || s.used[h0] {
 			continue
 		}
 		// Trace: at each vertex the next kept half-edge counterclockwise
-		// after the twin keeps the kept face on the right.
+		// after the twin keeps the kept face on the right. That map is a
+		// permutation of the kept half-edges, so the first one met that is
+		// used is h0: the contour closes there, also where other kept
+		// half-edges leave the same vertex (where regions touch at a point).
 		begin := true
 		run_row := max(u32)
 		run_t0, run_t1: f64
@@ -1680,8 +1783,10 @@ bool_emit :: proc(s: ^Bool_Scratch) {
 			next := max(u32)
 			for step in 1 ..= n {
 				c := s.vlist[s.vstart[v1] + (at + step) % n]
-				if s.keep[c] && !s.used[c] {
-					next = c
+				if s.keep[c] {
+					if !s.used[c] {
+						next = c
+					}
 					break
 				}
 			}
@@ -1692,6 +1797,17 @@ bool_emit :: proc(s: ^Bool_Scratch) {
 			h = next
 		}
 		contours_end(&s.out, true, false)
+		last := len(s.out.contours) - 1
+		if area := contours_area(&s.out, last); area != 0 {
+			append(&s.oface, s.hface[h0 ~ 1])
+			append(&s.ohole, area < 0)
+		} else {
+			ct := pop(&s.out.contours)
+			resize(&s.out.pts, int(ct.start))
+			resize(&s.out.kinds, int(ct.seg))
+			resize(&s.out_row, int(ct.seg))
+			resize(&s.out_t, int(ct.seg))
+		}
 	}
 }
 

@@ -30,6 +30,12 @@ cubic_range :: #force_inline proc "contextless" (p: [4][2]$T, t0, t1: T) -> (q: 
 	return
 }
 
+// The cubic a quadratic (p0, its control c, p1) is: the same curve at the
+// same t, up to rounding (degree raising).
+cubic_from_quad :: #force_inline proc "contextless" (p0, c, p1: [2]$T) -> [4][2]T {
+	return {p0, p0 + (c - p0) * (2.0 / 3.0), p1 + (c - p1) * (2.0 / 3.0), p1}
+}
+
 // How many quadratics approximate the cubic within `tol`: each is the
 // midpoint approximation of its piece, off by at most
 // sqrt(3)/36 |p3 - 3 p2 + 3 p1 - p0| / n^3.
@@ -93,7 +99,14 @@ cubic_area :: proc "contextless" (p: [4][2]$T) -> T {
 	return a / 20
 }
 
+// How a fill reads winding numbers: inside where the winding is non-zero, or
+// where it is odd.
+Fill_Rule :: enum u8 {
+	Non_Zero,
+	Even_Odd,
+}
+
 // Whether a winding number is inside under a fill rule.
-fill_inside :: #force_inline proc "contextless" (w: i32, even_odd: bool) -> bool {
-	return w & 1 != 0 if even_odd else w != 0
+fill_inside :: #force_inline proc "contextless" (w: i32, rule: Fill_Rule) -> bool {
+	return w & 1 != 0 if rule == .Even_Odd else w != 0
 }

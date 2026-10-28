@@ -150,8 +150,8 @@ test_hairline_outline :: proc(t: ^testing.T) {
 	for q in ([3]Vec2{{50, 20}, {30, 30}, {50, 9.8}}) {
 		r := (q - origin) / extent
 		f := Vec2{1, 1} / extent
-		testing.expect_value(t, coverage(words, r, f, false), coverage(pwords, r, f, false))
-		testing.expect_value(t, coverage(cwords, r, f, false), coverage(pwords, r, f, false))
+		testing.expect_value(t, coverage(words, r, f, .Non_Zero), coverage(pwords, r, f, .Non_Zero))
+		testing.expect_value(t, coverage(cwords, r, f, .Non_Zero), coverage(pwords, r, f, .Non_Zero))
 	}
 	testing.expect(t, slice.equal(words[HEADER:words[4]], pwords[HEADER:]))
 
@@ -291,7 +291,7 @@ test_small_box_coverage :: proc(t: ^testing.T) {
 	defer delete(words)
 	testing.expect(t, origin == {} && extent == 1)
 	for x in ([4]f32{0.1, 0.37, 0.7, 0.93}) {
-		cov := coverage(words, {x, 0.5 * x}, {1e-4, 1e-4}, false)
+		cov := coverage(words, {x, 0.5 * x}, {1e-4, 1e-4}, .Non_Zero)
 		testing.expectf(t, abs(cov - 0.5) < 2e-3, "at x = %v: %v", x, cov)
 	}
 }
@@ -333,8 +333,8 @@ test_footprint :: proc(t: ^testing.T) {
 	testing.expect_value(t, footprint_of(j), Vec2{s, s})
 	// A pixel center 0.2 px inside the left edge.
 	rc := Vec2{0.2 * s, 0.5}
-	testing.expect(t, abs(coverage_jacobian(words, rc, j, false) - 0.7) < 1e-3)
-	testing.expect_value(t, coverage_jacobian(words, rc, j, false), coverage(words, rc, {s, s}, false))
+	testing.expect(t, abs(coverage_jacobian(words, rc, j, .Non_Zero) - 0.7) < 1e-3)
+	testing.expect_value(t, coverage_jacobian(words, rc, j, .Non_Zero), coverage(words, rc, {s, s}, .Non_Zero))
 	// Rotated 45 degrees, the footprint box grows by sqrt 2.
 	c := math.cos(f32(math.PI / 4)) * s
 	rot := matrix[2, 2]f32{c, -c, c, c}
@@ -377,7 +377,7 @@ test_exact_area :: proc(t: ^testing.T) {
 	words, origin, extent := built(t, &b)
 	defer delete(words)
 	at :: proc(words: []u32, origin: Vec2, extent: f32, x, y: f32) -> f32 {
-		return coverage(words, (Vec2{x, y} - origin) / extent, {1, 1} / extent, false)
+		return coverage(words, (Vec2{x, y} - origin) / extent, {1, 1} / extent, .Non_Zero)
 	}
 	near :: proc(a, b: f32) -> bool {return abs(a - b) < 1e-4}
 	testing.expect(t, near(at(words, origin, extent, 10.5, 15.5), 0.7))
@@ -416,7 +416,7 @@ test_affine_footprints :: proc(t: ^testing.T) {
 		for gy in 0 ..< 40 {
 			for gx in 0 ..< 60 {
 				rc := Vec2{(f32(gx) + 0.37) / 60 * 1.05 - 0.02, (f32(gy) + 0.61) / 40 * 0.75 - 0.02}
-				got := coverage_affine(words, rc, u, v, false)
+				got := coverage_affine(words, rc, u, v, .Non_Zero)
 				inside := 0
 				N :: 64
 				for sy in 0 ..< N {
@@ -537,7 +537,7 @@ test_affine_near_upright :: proc(t: ^testing.T) {
 			// Centers across the left edge x = 0, where the area right of
 			// it is (x + 0.4) / 0.8 of the pixel, nearly.
 			q := Vec2{f32(k) * 0.02 - 0.4, 100}
-			got := coverage_affine(words, (q - origin) / extent, u / extent, v / extent, false)
+			got := coverage_affine(words, (q - origin) / extent, u / extent, v / extent, .Non_Zero)
 			worst = max(worst, abs(got - clamp((q.x + 0.4) / 0.8, 0, 1)))
 		}
 	}
@@ -576,4 +576,39 @@ test_build_flat_shapes :: proc(t: ^testing.T) {
 			delete(words)
 		}
 	}
+}
+
+// builder_add_contours builds what the Builder's own calls build: lines,
+// cubics (a raised quadratic among them), a closed and an open contour.
+@(test)
+test_builder_add_contours :: proc(t: ^testing.T) {
+	c: Contours
+	defer contours_destroy(&c)
+	contours_begin(&c, {0, 0})
+	contours_line(&c, {8, 0})
+	contours_cubic(&c, {9, 3}, {6, 8}, {4, 8})
+	contours_quad(&c, {0, 8}, {0, 4})
+	contours_end(&c, true, false)
+	contours_begin(&c, {2, 2})
+	contours_line(&c, {5, 3})
+	contours_end(&c, false, false)
+	a, b: Builder
+	defer builder_destroy(&a)
+	defer builder_destroy(&b)
+	builder_add_contours(&a, &c, 0, len(c.contours))
+	q := cubic_from_quad(Vec2{4, 8}, Vec2{0, 8}, Vec2{0, 4})
+	move_to(&b, {0, 0})
+	line_to(&b, {8, 0})
+	cubic_to(&b, {9, 3}, {6, 8}, {4, 8})
+	cubic_to(&b, q[1], q[2], q[3])
+	close(&b)
+	move_to(&b, {2, 2})
+	line_to(&b, {5, 3})
+	end_open(&b)
+	wa, _, _, oka := build(&a, search = false)
+	defer delete(wa)
+	wb, _, _, okb := build(&b, search = false)
+	defer delete(wb)
+	testing.expect(t, oka && okb)
+	testing.expect(t, slice.equal(wa, wb))
 }

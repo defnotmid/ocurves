@@ -286,3 +286,58 @@ test_near_runs_one_overlap :: proc(t: ^testing.T) {
 		}
 	}
 }
+
+// bool_run's regions: a ring (a square with a square hole) with an island in
+// its hole, and a square touching the ring at a corner. Simplified, they are
+// three regions, each its Solid outline then its holes; the corner square
+// touches the ring at one point only, so it is a region of its own, and the
+// ring's hole is the ring's although it is a contour of its own.
+@(test)
+test_bool_regions :: proc(t: ^testing.T) {
+	c: Contours
+	defer contours_destroy(&c)
+	square :: proc(c: ^Contours, x0, y0, x1, y1: f32, hole: bool) {
+		contours_begin(c, {x0, y0})
+		contours_line(c, {x1, y0})
+		contours_line(c, {x1, y1})
+		contours_line(c, {x0, y1})
+		contours_end(c, true, false)
+		if (contours_area(c, len(c.contours) - 1) > 0) == hole {
+			contours_reverse(c, len(c.contours) - 1)
+		}
+	}
+	square(&c, 0, 0, 10, 10, false)
+	square(&c, 2, 2, 8, 8, true)
+	square(&c, 4, 4, 6, 6, false)
+	square(&c, 10, 10, 14, 14, false)
+	s: Bool_Scratch
+	defer bool_scratch_destroy(&s)
+	budget := DEFAULT_BUDGET
+	inputs := [1]Bool_Input{{0, u32(len(c.contours)), .Non_Zero}}
+	testing.expect_value(t, bool_run(&s, &c, inputs[:], .Union, &budget), Bool_Error.None)
+	testing.expect_value(t, len(s.faces), 3)
+	testing.expect_value(t, len(s.out.contours), 4)
+	holes, at := 0, u32(0)
+	for r in s.faces {
+		testing.expect_value(t, r.x, at)
+		at = r.x + r.y
+		for i in 0 ..< r.y {
+			a := contours_area(&s.out, int(r.x + i))
+			testing.expect(t, (a > 0) == (i == 0))
+			holes += int(a < 0)
+		}
+	}
+	testing.expect_value(t, holes, 1)
+	// The region holding (1, 1) holds the ring's hole; (5, 5) and (12, 12)
+	// lie in regions of one contour.
+	for q in ([3][2]f64{{1, 1}, {5, 5}, {12, 12}}) {
+		n := 0
+		for r in s.faces {
+			if w, _ := contours_winding(&s.out, int(r.x), int(r.y), q, &s.stack); w != 0 {
+				n += 1
+				testing.expect_value(t, r.y, 2 if q.x == 1 else 1)
+			}
+		}
+		testing.expect_value(t, n, 1)
+	}
+}
