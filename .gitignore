@@ -1,1 +1,8 @@
 build/
+# Renders are never committed (the demo's demo.mp4 included).
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.avi
+*.m4v
