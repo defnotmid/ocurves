@@ -24,6 +24,13 @@ odin run demo/bake -collection:deps=.. -o:speed -- demo/media/bake.json
 
 The bake draws on a GPU (SDL_GPU, headless) for the GPU twin scene.
 
+`thumb.lua` is ocurves' 480 x 480 thumbnail for the site's project list
+(Bez over a cubic with its handles, on the list's slate):
+
+```sh
+onimite frame demo/thumb.lua 0s -o thumb.png
+```
+
 | bars | scene | what |
 | --- | --- | --- |
 | 1-2 | Title | a cubic draws itself on with its handles, Bez slides in, the wordmark lands |
