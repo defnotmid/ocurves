@@ -101,15 +101,22 @@ contour_points :: proc "contextless" (c: ^Contours, i: int) -> int {
 // points and kinds (rows may lie in any order, as bool_run's do); `src` may
 // be `dst`.
 contours_append :: proc(dst, src: ^Contours, first, count: int) {
-	// Size, then fill: once reserved, appending moves nothing.
+	// Size, then fill: once reserved, appending moves nothing. A table
+	// appended to again and again grows geometrically; one filled once
+	// from empty is exact.
+	grow :: proc(a: ^[dynamic]$T, n: int) {
+		if len(a) + n > cap(a) {
+			reserve(a, max(2 * cap(a), len(a) + n))
+		}
+	}
 	np, nk := 0, 0
 	for i in first ..< first + count {
 		np += contour_points(src, i)
 		nk += int(src.contours[i].segs)
 	}
-	reserve(&dst.pts, len(dst.pts) + np)
-	reserve(&dst.kinds, len(dst.kinds) + nk)
-	reserve(&dst.contours, len(dst.contours) + count)
+	grow(&dst.pts, np)
+	grow(&dst.kinds, nk)
+	grow(&dst.contours, count)
 	for i in first ..< first + count {
 		ct := src.contours[i]
 		n := contour_points(src, i)
