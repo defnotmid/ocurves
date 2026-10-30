@@ -290,8 +290,8 @@ build :: proc(b: ^Builder, allocator := context.allocator, search := true) -> (w
 	return out[:], origin, extent, true
 }
 
-// `build`, appending the words to `out` (reserved exactly when empty),
-// without an outline.
+// `build`, appending the words to `out` (reserved exactly when nothing is
+// allocated, geometrically as shapes are appended), without an outline.
 build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin: Vec2, extent: f32, ok: bool) {
 	close(b)
 	if len(b.curves) == 0 {
@@ -498,9 +498,7 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 
 	n := HEADER + 4 * cells + len(lists) + 2 * kept + 6 * len(pieces)
 	base := len(out)
-	if base == 0 {
-		reserve(out, n)
-	}
+	grow(out, n)
 	resize(out, base + n)
 	d := out[base:]
 	d[0], d[1] = u32(nx), u32(ny)

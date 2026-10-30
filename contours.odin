@@ -101,14 +101,7 @@ contour_points :: proc "contextless" (c: ^Contours, i: int) -> int {
 // points and kinds (rows may lie in any order, as bool_run's do); `src` may
 // be `dst`.
 contours_append :: proc(dst, src: ^Contours, first, count: int) {
-	// Size, then fill: once reserved, appending moves nothing. A table
-	// appended to again and again grows geometrically; one filled once
-	// from empty is exact.
-	grow :: proc(a: ^[dynamic]$T, n: int) {
-		if len(a) + n > cap(a) {
-			reserve(a, max(2 * cap(a), len(a) + n))
-		}
-	}
+	// Size, then fill: once reserved, appending moves nothing.
 	np, nk := 0, 0
 	for i in first ..< first + count {
 		np += contour_points(src, i)
@@ -123,6 +116,15 @@ contours_append :: proc(dst, src: ^Contours, first, count: int) {
 		append(&dst.contours, Contour{start = u32(len(dst.pts)), seg = u32(len(dst.kinds)), segs = ct.segs, closed = ct.closed})
 		append(&dst.pts, ..src.pts[ct.start:][:n])
 		append(&dst.kinds, ..src.kinds[ct.seg:][:ct.segs])
+	}
+}
+
+// Reserves room for n more: a table appended to again and again grows
+// geometrically; one filled once from empty is exact.
+@(private)
+grow :: proc(a: ^[dynamic]$T, n: int) {
+	if len(a) + n > cap(a) {
+		reserve(a, max(2 * cap(a), len(a) + n))
 	}
 }
 
