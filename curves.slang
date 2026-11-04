@@ -540,6 +540,8 @@ float curves_band_coverage(float2 p1, float2 p2, float2 p3, float w) {
     float2 n = q / d;
     if (!(d > 1e-6)) {
         float2 dq = 2.0 * a * t + b;
+        // Where the curve stops it runs along `a`: B(t) = B(t*) + a (t - t*)^2.
+        if (dot(dq, dq) == 0.0) dq = a;
         n = float2(-dq.y, dq.x) / sqrt(dot(dq, dq));
     }
     float wa = max(abs(n.x), abs(n.y));

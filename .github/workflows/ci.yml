@@ -13,7 +13,7 @@ concurrency:
 
 env:
   # The Odin nightly ocurves is developed against (same pin as ovg).
-  ODIN_VERSION: dev-2026-10
+  ODIN_VERSION: dev-2026-11a
 
 jobs:
   test:

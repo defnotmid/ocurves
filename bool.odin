@@ -74,7 +74,7 @@ Bool_Scratch :: struct {
 	pnode:   [dynamic][2]u32, // per piece: the points at its ends
 	pdelta:  [dynamic]i32, // per piece: its winding per operand
 	boxes:   [dynamic][2][2]f64,
-	eboxes:  [dynamic][2][2]f64,
+	eboxes:  [dynamic][2][2]f64, // per edge: inflated by eps in repair_edges, exact from bool_windings
 	order:   [dynamic]u32,
 	keys:    [dynamic]u64, // sort keys of order, reused by stages
 	tkeys:   [dynamic]u64,
@@ -349,10 +349,19 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 	face_components(s)
 	resize(&s.cparent, nf)
 	slice.fill(s.cparent[:], max(u32))
+	clear(&s.oorder)
 	for f in 0 ..< nf {
 		if s.farea[f] < 0 {
 			s.cparent[f] = face_holder(s, f, false)
+			if s.cparent[f] != max(u32) {
+				append(&s.oorder, u32(f))
+			}
 		}
+	}
+	// A face's pieces join only across a vertex no other edge reaches.
+	resize(&s.counts, len(s.vpos))
+	for &joins, v in s.counts {
+		joins = u32(s.vstart[v + 1] - s.vstart[v] == 2)
 	}
 	// The regions, in face order.
 	for f in 0 ..< nf {
@@ -368,9 +377,9 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 		}
 		first := u32(len(s.out.contours))
 		emit_face_reversed(s, u32(f))
-		for g in 0 ..< nf {
+		for g in s.oorder {
 			if s.cparent[g] == u32(f) {
-				emit_face_reversed(s, u32(g))
+				emit_face_reversed(s, g)
 			}
 		}
 		append(&s.faces, [2]u32{first, u32(len(s.out.contours)) - first})
@@ -381,7 +390,8 @@ bool_divide :: proc(s: ^Bool_Scratch, c: ^Contours, inputs: []Bool_Input, budget
 	return
 }
 
-// Each face's component (s.fcomp) and the box of its cycle (s.fbox).
+// Each face's component (s.fcomp) and the box of its cycle (s.fbox), from the
+// roots and exact boxes bool_windings left.
 @(private = "file")
 face_components :: proc(s: ^Bool_Scratch) {
 	resize(&s.fcomp, len(s.farea))
@@ -389,13 +399,13 @@ face_components :: proc(s: ^Bool_Scratch) {
 	slice.fill(s.fbox[:], [2][2]f64{{math.INF_F64, math.INF_F64}, {-math.INF_F64, -math.INF_F64}})
 	for e, i in s.edges {
 		if e.alive {
-			r := find(s.comp[:], e.v0)
-			lo, hi := box_of(s.ecurve[i])
+			r := s.comp[e.v0]
+			b0 := s.eboxes[i]
 			for f in ([2]u32{s.hface[2 * i], s.hface[2 * i + 1]}) {
 				s.fcomp[f] = r
 				b := &s.fbox[f]
-				b[0] = {min(b[0].x, lo.x), min(b[0].y, lo.y)}
-				b[1] = {max(b[1].x, hi.x), max(b[1].y, hi.y)}
+				b[0] = {min(b[0].x, b0[0].x), min(b[0].y, b0[0].y)}
+				b[1] = {max(b[1].x, b0[1].x), max(b[1].y, b0[1].y)}
 			}
 		}
 	}
@@ -474,43 +484,14 @@ emit_face_reversed :: proc(s: ^Bool_Scratch, f: u32) {
 	clear(&s.queue)
 	he := s.fhalf[f]
 	for {
-		append(&s.queue, he)
+		append(&s.queue, he ~ 1)
 		he = s.hnext[he]
 		if he == s.fhalf[f] {
 			break
 		}
 	}
-	// Backwards: the twins, last first.
-	begun := false
-	run_row := max(u32)
-	run_t0, run_t1: f64
-	run_v0, end_v: u32
-	#reverse for x in s.queue {
-		h := x ~ 1
-		e := s.edges[h >> 1]
-		p := &s.pieces[e.piece]
-		ta, tb := source_t(p, e.t0), source_t(p, e.t1)
-		v0, v1 := e.v0, e.v1
-		if h & 1 == 1 {
-			ta, tb, v0, v1 = tb, ta, v1, v0
-		}
-		switch {
-		case !begun:
-			contours_begin(&s.out, s.vout[v0])
-			begun = true
-			run_row, run_t0, run_t1, run_v0 = p.row, ta, tb, v0
-		case p.row == run_row && ta == run_t1 && s.vstart[v0 + 1] - s.vstart[v0] == 2 && (tb > ta) == (run_t1 > run_t0):
-			// One segment's pieces join where nothing else meets them: a
-			// vertex other edges reach is a corner of every face there.
-			run_t1 = tb
-		case:
-			emit_range(s, run_row, run_t0, run_t1, run_v0, v0)
-			run_row, run_t0, run_t1, run_v0 = p.row, ta, tb, v0
-		}
-		end_v = v1
-	}
-	emit_range(s, run_row, run_t0, run_t1, run_v0, end_v)
-	contours_end(&s.out, true, false)
+	slice.reverse(s.queue[:])
+	emit_cycle(s, s.counts[:])
 }
 
 @(private = "file")
@@ -1679,9 +1660,17 @@ bool_windings :: proc(s: ^Bool_Scratch, k: int, eps: f64) -> Bool_Error {
 	slice.fill(s.cleft[:], max(u32))
 	for p, v in s.vpos {
 		r := find(s.comp[:], u32(v))
+		s.comp[v] = r
 		l := s.cleft[r]
 		if l == max(u32) || p.x < s.vpos[l].x || (p.x == s.vpos[l].x && p.y < s.vpos[l].y) {
 			s.cleft[r] = u32(v)
+		}
+	}
+	resize(&s.eboxes, len(s.edges))
+	for e, i in s.edges {
+		if e.alive {
+			lo, hi := box_of(s.ecurve[i])
+			s.eboxes[i] = {lo, hi}
 		}
 	}
 	resize(&s.fdone, len(s.farea))
@@ -1697,14 +1686,14 @@ bool_windings :: proc(s: ^Bool_Scratch, k: int, eps: f64) -> Bool_Error {
 			if s.fdone[f] || s.farea[f] >= 0 {
 				continue
 			}
-			root := find(s.comp[:], e.v0)
+			root := s.comp[e.v0]
 			q := s.vpos[s.cleft[root]]
 			w := s.fwind[int(f) * k:][:k]
 			for e2, j in s.edges {
 				// An edge whose box lies above, below or left of q can't
 				// cross the ray (curve_winding's own first test).
-				lo, hi := box_of(s.ecurve[j])
-				if !e2.alive || q.y < lo.y || q.y > hi.y || hi.x < q.x || find(s.comp[:], e2.v0) == root {
+				b := s.eboxes[j]
+				if !e2.alive || q.y < b[0].y || q.y > b[1].y || b[1].x < q.x || s.comp[e2.v0] == root {
 					continue
 				}
 				cw, on := curve_winding(s.ecurve[j], q, eps / 64, &s.stack)
@@ -1793,32 +1782,13 @@ bool_emit :: proc(s: ^Bool_Scratch) {
 		// permutation of the kept half-edges, so the first one met that is
 		// used is h0: the contour closes there, also where other kept
 		// half-edges leave the same vertex (where regions touch at a point).
-		begin := true
-		run_row := max(u32)
-		run_t0, run_t1: f64
-		run_v0: u32
+		clear(&s.queue)
 		h := u32(h0)
 		for {
 			s.used[h] = true
+			append(&s.queue, h)
 			e := s.edges[h >> 1]
-			p := &s.pieces[e.piece]
-			// The piece's range in its source segment's t, in travel order.
-			ta, tb := source_t(p, e.t0), source_t(p, e.t1)
-			v0, v1 := e.v0, e.v1
-			if h & 1 == 1 {
-				ta, tb, v0, v1 = tb, ta, v1, v0
-			}
-			if begin {
-				contours_begin(&s.out, s.vout[v0])
-				begin = false
-				run_row, run_t0, run_t1, run_v0 = p.row, ta, tb, v0
-			} else if p.row == run_row && ta == run_t1 && kept_out[v0] == 1 && (tb > ta) == (run_t1 > run_t0) {
-				run_t1 = tb
-			} else {
-				emit_range(s, run_row, run_t0, run_t1, run_v0, v0)
-				run_row, run_t0, run_t1, run_v0 = p.row, ta, tb, v0
-			}
-			// Next.
+			v1 := e.v1 if h & 1 == 0 else e.v0
 			n := s.vstart[v1 + 1] - s.vstart[v1]
 			at := s.hpos[h ~ 1]
 			next := max(u32)
@@ -1832,12 +1802,11 @@ bool_emit :: proc(s: ^Bool_Scratch) {
 				}
 			}
 			if next == max(u32) {
-				emit_range(s, run_row, run_t0, run_t1, run_v0, v1)
 				break
 			}
 			h = next
 		}
-		contours_end(&s.out, true, false)
+		emit_cycle(s, kept_out)
 		last := len(s.out.contours) - 1
 		if area := contours_area(&s.out, last); area != 0 {
 			append(&s.oface, s.hface[h0 ~ 1])
@@ -1850,6 +1819,52 @@ bool_emit :: proc(s: ^Bool_Scratch) {
 			resize(&s.out_t, int(ct.seg))
 		}
 	}
+}
+
+// Emits the closed cycle of half-edges in s.queue into s.out. One segment's
+// pieces join back into one range across a vertex where joins[v] == 1: any
+// other vertex is a corner of the contours there. The cycle starts where
+// nothing joins, so a segment split across its last and first half-edges
+// joins too.
+@(private = "file")
+emit_cycle :: proc(s: ^Bool_Scratch, joins: []u32) {
+	Range :: struct {
+		row:    u32,
+		t0, t1: f64,
+		v0, v1: u32,
+	}
+	// The half-edge's range of its source segment, in travel order.
+	range_of :: #force_inline proc "contextless" (s: ^Bool_Scratch, h: u32) -> Range {
+		e := s.edges[h >> 1]
+		p := &s.pieces[e.piece]
+		ta, tb := source_t(p, e.t0), source_t(p, e.t1)
+		return {p.row, ta, tb, e.v0, e.v1} if h & 1 == 0 else {p.row, tb, ta, e.v1, e.v0}
+	}
+	joined :: #force_inline proc "contextless" (a, b: Range, joins: []u32) -> bool {
+		return b.row == a.row && b.t0 == a.t1 && joins[b.v0] == 1 && (b.t1 > b.t0) == (a.t1 > a.t0)
+	}
+	m := len(s.queue)
+	start := 0
+	for _ in 1 ..< m {
+		prev := (start + m - 1) % m
+		if !joined(range_of(s, s.queue[prev]), range_of(s, s.queue[start]), joins) {
+			break
+		}
+		start = prev
+	}
+	run := range_of(s, s.queue[start])
+	contours_begin(&s.out, s.vout[run.v0])
+	for k in 1 ..< m {
+		r := range_of(s, s.queue[(start + k) % m])
+		if joined(run, r, joins) {
+			run.t1, run.v1 = r.t1, r.v1
+		} else {
+			emit_range(s, run.row, run.t0, run.t1, run.v0, run.v1)
+			run = r
+		}
+	}
+	emit_range(s, run.row, run.t0, run.t1, run.v0, run.v1)
+	contours_end(&s.out, true, false)
 }
 
 // A piece parameter in its source segment's t; the piece's ends exactly.

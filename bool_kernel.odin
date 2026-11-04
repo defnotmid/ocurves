@@ -95,29 +95,30 @@ monotone_pieces :: proc(q: [4][2]f64, line: bool, row: u32, operand: u16, flat: 
 // within `on_tol` of the curve (a cell that small still holds it).
 curve_winding :: proc(p: [4][2]f64, q: [2]f64, on_tol: f64, stack: ^[dynamic][2]f64) -> (w: i32, on: bool) {
 	clear(stack)
-	append(stack, [2]f64{0, 1})
-	for len(stack) > 0 {
-		r := pop(stack)
-		c := cubic_range(p, r[0], r[1])
+	// The curve is the first cell, as it is: most curves end there.
+	r := [2]f64{0, 1}
+	c := p
+	for {
 		lo, hi := box_of(c)
 		if q.x < lo.x || q.x > hi.x || q.y < lo.y || q.y > hi.y {
 			if lo.x > q.x && (c[0].y > q.y) != (c[3].y > q.y) {
 				w += 1 if c[3].y > q.y else -1
 			}
-			continue
-		}
-		// A cell this small, or one f64 can't halve any more, holds q.
-		m := (r[0] + r[1]) / 2
-		if max(hi.x - lo.x, hi.y - lo.y) <= on_tol || m <= r[0] || m >= r[1] {
+		} else if m := (r[0] + r[1]) / 2; max(hi.x - lo.x, hi.y - lo.y) <= on_tol || m <= r[0] || m >= r[1] {
+			// A cell this small, or one f64 can't halve any more, holds q.
 			on = true
-			continue
+		} else {
+			// One at a time: a single append stores in place, two copy
+			// through memmove.
+			append(stack, [2]f64{r[0], m})
+			append(stack, [2]f64{m, r[1]})
 		}
-		// One at a time: a single append stores in place, two copy
-		// through memmove.
-		append(stack, [2]f64{r[0], m})
-		append(stack, [2]f64{m, r[1]})
+		if len(stack) == 0 {
+			return
+		}
+		r = pop(stack)
+		c = cubic_range(p, r[0], r[1])
 	}
-	return
 }
 
 // A stretch where two pieces come within the tolerance: [s0, s1] of the
@@ -201,13 +202,13 @@ near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dyna
 			continue
 		}
 		if split_a {
-			m := (cell[0] + cell[1]) / 2
-			append(&s.stack, Cell_Pair{{cell[0], m, cell[2], cell[3]}, piece_range(a, cell[0], m), pb})
-			append(&s.stack, Cell_Pair{{m, cell[1], cell[2], cell[3]}, piece_range(a, m, cell[1]), pb})
+			q0, q1 := piece_halves(a, cell[0], ma, cell[1], pa)
+			append(&s.stack, Cell_Pair{{cell[0], ma, cell[2], cell[3]}, q0, pb})
+			append(&s.stack, Cell_Pair{{ma, cell[1], cell[2], cell[3]}, q1, pb})
 		} else {
-			m := (cell[2] + cell[3]) / 2
-			append(&s.stack, Cell_Pair{{cell[0], cell[1], cell[2], m}, pa, piece_range(b, cell[2], m)})
-			append(&s.stack, Cell_Pair{{cell[0], cell[1], m, cell[3]}, pa, piece_range(b, m, cell[3])})
+			q0, q1 := piece_halves(b, cell[2], mb, cell[3], pb)
+			append(&s.stack, Cell_Pair{{cell[0], cell[1], cell[2], mb}, pa, q0})
+			append(&s.stack, Cell_Pair{{cell[0], cell[1], mb, cell[3]}, pa, q1})
 		}
 	}
 	merge_runs(a, b, tol, s, out)
@@ -216,7 +217,7 @@ near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dyna
 
 // The leaves' connected stretches as runs, each a point run when all its
 // ends lie within 2 tol of its middle.
-@(private = "file")
+@(private)
 merge_runs :: proc(a, b: ^Piece, tol: f64, s: ^Kernel_Scratch, out: ^[dynamic]Run) {
 	if len(s.leaves) == 0 {
 		return
@@ -226,16 +227,22 @@ merge_runs :: proc(a, b: ^Piece, tol: f64, s: ^Kernel_Scratch, out: ^[dynamic]Ru
 	// the closed form's bisection.
 	gap :: 1e-12
 	first := len(out)
-	cur := s.leaves[0]
-	for l in s.leaves[1:] {
-		if l.s0 <= cur.s1 + gap && l.t0 <= cur.t1 + gap && l.t1 >= cur.t0 - gap {
-			cur = {cur.s0, max(cur.s1, l.s1), min(cur.t0, l.t0), max(cur.t1, l.t1), false}
-		} else {
-			append(out, cur)
-			cur = l
+	// A leaf can bridge runs other than the last, and a merged run can reach
+	// another in turn.
+	for l in s.leaves {
+		l := l
+		for i := first; i < len(out); {
+			r := out[i]
+			if l.s0 <= r.s1 + gap && r.s0 <= l.s1 + gap && l.t0 <= r.t1 + gap && r.t0 <= l.t1 + gap {
+				l = {min(r.s0, l.s0), max(r.s1, l.s1), min(r.t0, l.t0), max(r.t1, l.t1), false}
+				ordered_remove(out, i)
+				i = first
+			} else {
+				i += 1
+			}
 		}
+		append(out, l)
 	}
-	append(out, cur)
 	for &r in out[first:] {
 		m := (piece_at(a, (r.s0 + r.s1) / 2) + piece_at(b, (r.t0 + r.t1) / 2)) / 2
 		ends := [4][2]f64{piece_at(a, r.s0), piece_at(a, r.s1), piece_at(b, r.t0), piece_at(b, r.t1)}
@@ -354,6 +361,21 @@ piece_range :: #force_inline proc "contextless" (p: ^Piece, s0, s1: f64) -> [4][
 		return {a, a, b, b}
 	}
 	return cubic_range(p.p, s0, s1)
+}
+
+// The piece's controls over [s0, m] and [m, s1], given `q` over [s0, s1]: the
+// ends of q stand, and both halves share the midpoint.
+@(private = "file")
+piece_halves :: #force_inline proc "contextless" (p: ^Piece, s0, m, s1: f64, q: [4][2]f64) -> (q0, q1: [4][2]f64) {
+	if p.line {
+		pm := p.p[0] + (p.p[3] - p.p[0]) * m
+		return {q[0], q[0], pm, pm}, {pm, pm, q[3], q[3]}
+	}
+	h0, h1 := (m - s0) / 3, (s1 - m) / 3
+	pm, dm := cubic_at(p.p, m), cubic_tangent(p.p, m)
+	q0 = {q[0], q[0] + cubic_tangent(p.p, s0) * h0, pm - dm * h0, pm}
+	q1 = {pm, pm + dm * h1, q[3] - cubic_tangent(p.p, s1) * h1, q[3]}
+	return
 }
 
 piece_at :: #force_inline proc "contextless" (p: ^Piece, s: f64) -> [2]f64 {

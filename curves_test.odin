@@ -1,5 +1,6 @@
 package curves
 
+import "core:mem"
 import "core:math"
 import "core:slice"
 import "core:testing"
@@ -642,4 +643,110 @@ test_hairline_folded_curve :: proc(t: ^testing.T) {
 			testing.expectf(t, hairline_at(words, origin, extent, I, q.x, q.y, 1) > 0.5, "cubic %v: the edge at %v is hidden", cubic, q)
 		}
 	}
+}
+
+@(test)
+test_flat_mean_coverage :: proc(t: ^testing.T) {
+	b: Builder
+	defer builder_destroy(&b)
+	move_to(&b, {0, 5})
+	line_to(&b, {10, 5})
+	close(&b)
+	words, _, _, ok := build(&b)
+	testing.expect(t, ok)
+	defer delete(words)
+	testing.expect_value(t, mean_coverage(words), f32(0))
+	testing.expect_value(t, fade(words, 0, {10, 10}), f32(0))
+}
+
+@(test)
+test_orient_by_area :: proc(t: ^testing.T) {
+	// A contour wound as a hole in a solid square clears the square under
+	// non-zero; wound the wrong way it stays filled.
+	solid :: proc(b: ^Builder) {
+		square(b, 0, 0, 100, 100)
+		orient(b, .Solid)
+	}
+	cleared :: proc(t: ^testing.T, b: ^Builder, at: Vec2, loc := #caller_location) {
+		words, origin, extent, ok := build(b)
+		testing.expect(t, ok, loc = loc)
+		defer delete(words)
+		cov := coverage(words, (at - origin) / extent, Vec2{0.1, 0.1} / extent, .Non_Zero)
+		testing.expectf(t, cov < 0.01, "coverage %v at %v", cov, at, loc = loc)
+	}
+	// Curves bulging in so far that the control polygon winds the other way.
+	{
+		b: Builder
+		defer builder_destroy(&b)
+		solid(&b)
+		move_to(&b, {40, 40})
+		quad_to(&b, {45, 43.67}, {50, 40})
+		quad_to(&b, {44.32, 42.5}, {45, 48.66})
+		quad_to(&b, {45.68, 42.5}, {40, 40})
+		close(&b)
+		orient(&b, .Hole)
+		cleared(t, &b, {45, 42.9})
+	}
+	// An open contour, both ways round: its closing line decides, wherever
+	// it lies.
+	for mid in ([2]Vec2{{70, 60}, {60, 70}}) {
+		b: Builder
+		defer builder_destroy(&b)
+		solid(&b)
+		move_to(&b, {60, 60})
+		line_to(&b, mid)
+		line_to(&b, {70, 70})
+		orient(&b, .Hole)
+		close(&b)
+		cleared(t, &b, (Vec2{130, 130} + mid) / 3)
+	}
+}
+
+@(test)
+test_hairline_pinned_stationary_endpoint :: proc(t: ^testing.T) {
+	b: Builder
+	defer builder_destroy(&b)
+	b.outline = true
+	move_to(&b, {0, 0})
+	quad_to(&b, {-1e-6, 0}, {1, 0})
+	end_open(&b)
+	words, _, _, ok := build(&b)
+	testing.expect(t, ok)
+	defer delete(words)
+	cov := hairline(words, {0, 0}, {0.02, 0}, {0, 0.02}, 1)
+	testing.expect(t, cov > 0.2)
+	// A tangent whose square underflows is no tangent either.
+	testing.expect(t, band_coverage({0, 0}, {-1e-23, 0}, {1, 0}, 1) > 0.5)
+}
+
+@(test)
+test_build_extent_out_of_range :: proc(t: ^testing.T) {
+	// An extent past f32's range, and one whose inverse is: scaled by it every
+	// point would be non-finite.
+	for pts in ([2][3]Vec2{{{-3e38, 3e38}, {3e38, -3e38}, {3e38, -2.9e38}}, {{0, 0}, {1e-39, 0}, {1e-39, 1e-39}}}) {
+		b: Builder
+		defer builder_destroy(&b)
+		move_to(&b, pts[0])
+		line_to(&b, pts[1])
+		line_to(&b, pts[2])
+		words, _, _, ok := build(&b)
+		defer delete(words)
+		testing.expect(t, !ok)
+	}
+}
+
+@(test)
+test_build_append_out_of_memory :: proc(t: ^testing.T) {
+	b: Builder
+	defer builder_destroy(&b)
+	move_to(&b, {0, 0})
+	line_to(&b, {1, 0})
+	line_to(&b, {1, 1})
+	buf: [64]u8
+	arena: mem.Arena
+	mem.arena_init(&arena, buf[:])
+	out := make([dynamic]u32, mem.arena_allocator(&arena))
+	_, _, ok := build_append(&b, &out)
+	testing.expect(t, !ok)
+	testing.expect_value(t, len(out), 0)
 }

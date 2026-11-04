@@ -233,7 +233,11 @@ orient :: proc(b: ^Builder, o: Orientation) {
 	curves := b.curves[b.contour:]
 	area: f32
 	for c in curves {
-		area += (c.p2.x - c.p1.x) * (c.p2.y + c.p1.y) + (c.p3.x - c.p2.x) * (c.p3.y + c.p2.y)
+		area += cubic_area(cubic_from_quad(c.p1, c.p2, c.p3))
+	}
+	// An open contour's area is closed by its line back to the start.
+	if b.open {
+		area += (b.start.x - b.last.x) * (b.start.y + b.last.y) / 2
 	}
 	if (o == .Solid && area < 0) || (o == .Hole && area > 0) {
 		slice.reverse(curves)
@@ -322,11 +326,11 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 		}
 	}
 	extent = max(hi.x - lo.x, hi.y - lo.y)
-	if !(extent > 0) || math.is_nan(sum) || math.is_inf(sum) {
+	inv := 1 / extent
+	if !(extent > 0) || math.is_inf(extent) || math.is_inf(inv) || math.is_nan(sum) || math.is_inf(sum) {
 		return
 	}
 	origin = lo
-	inv := 1 / extent
 	for &c in mono {
 		c = {(c.p1 - lo) * inv, (c.p2 - lo) * inv, (c.p3 - lo) * inv}
 	}
@@ -499,7 +503,9 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 	n := HEADER + 4 * cells + len(lists) + 2 * kept + 6 * len(pieces)
 	base := len(out)
 	grow(out, n)
-	resize(out, base + n)
+	if resize(out, base + n) != nil {
+		return
+	}
 	d := out[base:]
 	d[0], d[1] = u32(nx), u32(ny)
 	d[2], d[3] = transmute(u32)cw, transmute(u32)ch
@@ -534,7 +540,7 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 		cross :: proc "contextless" (a, b: Vec2) -> f32 {return a.x * b.y - a.y * b.x}
 		area += 2 * cross(c.p1, c.p2) + 2 * cross(c.p2, c.p3) + cross(c.p1, c.p3)
 	}
-	d[7] = transmute(u32)min(abs(area) / 6 / (size.x * size.y), 1)
+	d[7] = transmute(u32)(min(abs(area) / 6 / (size.x * size.y), 1) if size.x * size.y > 0 else f32(0))
 	return origin, extent, true
 }
 
@@ -1352,6 +1358,10 @@ band_coverage :: #force_inline proc "contextless" (p1, p2, p3: Vec2, w: f32) -> 
 	n := q / d
 	if !(d > 1e-6) {
 		dq := 2 * a * t + b
+		// Where the curve stops it runs along `a`: B(t) = B(t*) + a (t - t*)^2.
+		if dq.x * dq.x + dq.y * dq.y == 0 {
+			dq = a
+		}
 		n = Vec2{-dq.y, dq.x} / math.sqrt(dq.x * dq.x + dq.y * dq.y)
 	}
 	// The pixel's projection on the normal: two uniforms' sum, of widths

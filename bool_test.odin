@@ -384,3 +384,119 @@ test_bool_divide_shared_vertices :: proc(t: ^testing.T) {
 		testing.expectf(t, corner, "a face %v lacks the shared corner (10, 10)", r)
 	}
 }
+
+@(test)
+test_bool_emit_split_seam :: proc(t: ^testing.T) {
+	c: Contours
+	defer contours_destroy(&c)
+	// Outer box [0, 100] x [0, 100].
+	contours_begin(&c, {0, 0})
+	contours_line(&c, {100, 0})
+	contours_line(&c, {100, 100})
+	contours_line(&c, {0, 100})
+	contours_end(&c, true, false)
+	// D-shaped contour inside the box: a cubic arch split at its top y-extremum (t = 0.5) plus a closing line.
+	contours_begin(&c, {20, 40})
+	contours_cubic(&c, {20, 80}, {80, 80}, {80, 40})
+	contours_line(&c, {20, 40})
+	contours_end(&c, true, false)
+
+	s: Bool_Scratch
+	defer bool_scratch_destroy(&s)
+	budget := DEFAULT_BUDGET
+	inputs := [2]Bool_Input{{0, 1, .Non_Zero}, {1, 1, .Non_Zero}}
+	testing.expect_value(t, bool_run(&s, &c, inputs[:], .Difference, &budget), Bool_Error.None)
+	testing.expect_value(t, len(s.out.contours), 2)
+	// The hole must rejoin its monotone-split cubic into 1 cubic + 1 line = 2 segments.
+	testing.expect_value(t, s.out.contours[1].segs, u32(2))
+
+	budget = DEFAULT_BUDGET
+	div_in := [1]Bool_Input{{1, 1, .Non_Zero}}
+	testing.expect_value(t, bool_divide(&s, &c, div_in[:], &budget), Bool_Error.None)
+	testing.expect_value(t, len(s.out.contours), 1)
+	testing.expect_value(t, s.out.contours[0].segs, u32(2))
+}
+
+@(test)
+test_bool_retracted_handles_near_copy :: proc(t: ^testing.T) {
+	// A self-crossing contour with retracted handles and a copy a hair off:
+	// a segment's zero tangent at its end says nothing about which side of it
+	// the copy lies on. c2 zero: a quadratic; c1 too: a line.
+	Seg :: struct {
+		c1, c2, p: Vec2,
+	}
+	start := Vec2{51.840027, 71.527405}
+	segs := [?]Seg {
+		{start, {19.086546, 19.799244}, {52.370773, 35.846615}},
+		{{16.676903, 1.8244147}, {15.529675, 88.24855}, {15.529675, 88.24855}},
+		{{15.529675, 88.24855}, {10.467995, 96.507805}, {27.755207, 94.90796}},
+		{{48.121365, 35.695435}, {}, {3.8274884, 70.45884}},
+		{{75.35426, 41.24745}, {}, {28.96222, 32.759483}},
+		{{}, {}, {48.366875, 28.211296}},
+		{{3.490156, 86.07454}, {44.949425, 44.3155}, start},
+	}
+	c: Contours
+	defer contours_destroy(&c)
+	for d in ([2]Vec2{{}, {0.00021053688, 0.00037278642}}) {
+		contours_begin(&c, start + d)
+		for g in segs {
+			switch {
+			case g.c1 == {}:
+				contours_line(&c, g.p + d)
+			case g.c2 == {}:
+				contours_quad(&c, g.c1 + d, g.p + d)
+			case:
+				contours_cubic(&c, g.c1 + d, g.c2 + d, g.p + d)
+			}
+		}
+		contours_end(&c, true, false)
+	}
+	s: Bool_Scratch
+	defer bool_scratch_destroy(&s)
+	inputs := [2]Bool_Input{{0, 1, .Even_Odd}, {1, 1, .Even_Odd}}
+	for want in ([2]struct {
+			op:   Bool_Op,
+			area: f64,
+		}{{.Union, 1098.918}, {.Intersection, 1098.803}}) {
+		budget := DEFAULT_BUDGET
+		testing.expect_value(t, bool_run(&s, &c, inputs[:], want.op, &budget), Bool_Error.None)
+		area: f64
+		for i in 0 ..< len(s.out.contours) {
+			area += contours_area(&s.out, i)
+		}
+		testing.expectf(t, abs(area - want.area) < 0.01, "%v: area %v, want %v", want.op, area, want.area)
+	}
+}
+
+@(test)
+test_merge_runs_bridging :: proc(t: ^testing.T) {
+	a := Piece {
+		p    = {{0, 0}, {0, 0}, {10, 0}, {10, 0}},
+		line = true,
+	}
+	ks: Kernel_Scratch
+	defer kernel_scratch_destroy(&ks)
+	runs: [dynamic]Run
+	defer delete(runs)
+	for c in ([3]struct {
+			leaves: [3]Run,
+			want:   Run, // the last run
+			count:  int,
+		} {
+			// One leaf bridges two runs.
+			{{{0.0, 0.5, 0.0, 0.4, false}, {0.1, 0.5, 0.6, 1.0, false}, {0.5, 0.8, 0.3, 0.7, false}}, {0.0, 0.8, 0.0, 1.0, false}, 1},
+			// It reaches a run other than the last.
+			{{{0.0, 0.6, 0.0, 0.1, false}, {0.1, 0.5, 0.9, 1.0, false}, {0.55, 0.7, 0.05, 0.2, false}}, {0.0, 0.7, 0.0, 0.2, false}, 2},
+			// Only what it merged into reaches the first.
+			{{{0.0, 0.3, 0.0, 0.2, false}, {0.1, 0.5, 0.5, 0.7, false}, {0.4, 0.6, 0.1, 0.55, false}}, {0.0, 0.6, 0.0, 0.7, false}, 1},
+		}) {
+		clear(&ks.leaves)
+		clear(&runs)
+		for l in c.leaves {
+			append(&ks.leaves, l)
+		}
+		merge_runs(&a, &a, 1e-3, &ks, &runs)
+		testing.expect_value(t, len(runs), c.count)
+		testing.expect_value(t, runs[len(runs) - 1], c.want)
+	}
+}
