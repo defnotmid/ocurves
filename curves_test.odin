@@ -280,6 +280,55 @@ test_full_cell :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_grid_follows_the_shape :: proc(t: ^testing.T) {
+	// A shape built every frame gets about a cell per four pieces, however
+	// long and thin: sizing by its longer side alone left a 12:1 shape about
+	// a seventh of them, and each pixel walked the crowded cells' lists.
+	TEETH :: 400
+	Case :: struct {
+		w, h: f32,
+	}
+	for c in ([3]Case{{1200, 100}, {100, 1200}, {1000, 1000}}) {
+		b: Builder
+		defer builder_destroy(&b)
+		long := c.w >= c.h
+		at :: proc(along, across: f32, long: bool) -> Vec2 {
+			return long ? Vec2{along, across} : Vec2{across, along}
+		}
+		extent := max(c.w, c.h)
+		height := min(c.w, c.h)
+		move_to(&b, at(0, 0, long))
+		for k in 0 ..< TEETH {
+			along := f32(k) * extent / TEETH
+			line_to(&b, at(along, height * (k % 2 == 0 ? 1 : 0.5), long))
+		}
+		line_to(&b, at(extent, 0, long))
+		close(&b)
+		words, origin, scale, ok := build(&b, search = false)
+		testing.expect(t, ok)
+		defer delete(words)
+		testing.expectf(t, int(words[0] * words[1]) >= TEETH / 4, "%v by %v cells for %v by %v", words[0], words[1], c.w, c.h)
+		// The grid is only where pieces are found: the shape stays the shape.
+		inside := (at(extent / 2, height * 0.25, long) - origin) / scale
+		outside := (at(extent / 2, height * 1.5, long) - origin) / scale
+		testing.expect_value(t, abs(winding(words, inside)), 1)
+		testing.expect_value(t, winding(words, outside), 0)
+	}
+	// With no height to speak of: one row, as many columns as there are, no
+	// division by nothing reaching the size.
+	b: Builder
+	defer builder_destroy(&b)
+	for k in 0 ..< 40 {
+		square(&b, f32(k) * 25, 0, 20, 0.0001)
+	}
+	words, _, _, ok := build(&b, search = false)
+	testing.expect(t, ok)
+	defer delete(words)
+	testing.expect_value(t, words[1], 1)
+	testing.expectf(t, words[0] >= 40, "%v columns", words[0])
+}
+
+@(test)
 test_small_box_coverage :: proc(t: ^testing.T) {
 	// A box 1/10,000 of the shape's size centered on a sloped edge covers
 	// half of itself: its area must not drown in the edge's own size.

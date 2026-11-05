@@ -278,9 +278,9 @@ builder_add_contours :: proc(b: ^Builder, c: ^Contours, first, count: int) {
 // with the map back to source units: `p = origin + q * extent`. False (no
 // words) when there are no curves or they span nothing. `search` tries grid
 // sizes for the one keeping the fullest cell smallest (for shapes kept and
-// drawn often); without it the grid is sized from the piece count alone
-// (for shapes built every frame). With `b.outline` the words add the lists
-// `hairline` draws the contours from.
+// drawn often); without it the grid is sized from the piece count and the
+// shape's proportions (for shapes built every frame). With `b.outline` the
+// words add the lists `hairline` draws the contours from.
 build :: proc(b: ^Builder, allocator := context.allocator, search := true) -> (words: []u32, origin: Vec2, extent: f32, ok: bool) {
 	out := make([dynamic]u32, allocator)
 	origin, extent, ok = build_append(b, &out, search)
@@ -345,8 +345,12 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 	// a few pieces a cell would keep a huge grid for little gain.
 	first, last := 1, 16
 	if !search {
-		// About four pieces a cell; one cell for a few.
-		first = 1 if len(mono) <= 16 else clamp(int(math.ceil(math.sqrt(f32(len(mono)) / 4))), 1, MAX_CELLS)
+		// About four pieces a cell, whatever the shape's proportions; one cell
+		// for a few. n a unit makes n columns by n * shorter rows, or n by one
+		// while that's under a row.
+		cells := f32(len(mono)) / 4
+		shorter := min(size.x, size.y)
+		first = 1 if len(mono) <= 16 else clamp(int(math.ceil(min(cells, math.sqrt(cells / shorter)))), 1, MAX_CELLS)
 		last = first
 	}
 	for n in first ..= last {
