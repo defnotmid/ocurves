@@ -94,6 +94,9 @@ monotone_pieces :: proc(q: [4][2]f64, line: bool, row: u32, operand: u16, flat: 
 // crosses as its chord does, any other cell misses the ray. `on` reports q
 // within `on_tol` of the curve (a cell that small still holds it).
 curve_winding :: proc(p: [4][2]f64, q: [2]f64, on_tol: f64, stack: ^[dynamic][2]f64) -> (w: i32, on: bool) {
+	// A negative or NaN tolerance is none: under it a cell that is a point
+	// at q is never small enough, and every cell would be halved.
+	on_tol := on_tol if on_tol > 0 else 0
 	clear(stack)
 	// The curve is the first cell, as it is: most curves end there.
 	r := [2]f64{0, 1}
@@ -130,10 +133,13 @@ Run :: struct {
 }
 
 // A pair of cells: [s0, s1] of the first piece and [t0, t1] of the
-// second, with the pieces' controls over them.
+// second, with the pieces' controls over them, their boxes and whether
+// each is flat (a halving makes one cell new; the other's stand).
 Cell_Pair :: struct {
-	r:      [4]f64, // s0, s1, t0, t1
-	pa, pb: [4][2]f64,
+	r:            [4]f64, // s0, s1, t0, t1
+	pa, pb:       [4][2]f64,
+	box_a, box_b: [2][2]f64,
+	fa, fb:       bool,
 }
 
 Kernel_Scratch :: struct {
@@ -159,24 +165,29 @@ kernel_scratch_destroy :: proc(s: ^Kernel_Scratch) {
 near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dynamic]Run, budget: ^int, root := [4]f64{0, 1, 0, 1}) -> bool {
 	clear(&s.stack)
 	clear(&s.leaves)
-	append(&s.stack, Cell_Pair{root, piece_range(a, root[0], root[1]), piece_range(b, root[2], root[3])})
 	reach := tol + delta / 2
 	flat := tol / 16
-	for len(s.stack) > 0 {
-		if budget^ -= 1; budget^ < 0 {
-			return false
-		}
-		top := pop(&s.stack)
-		cell, pa, pb := top.r, top.pa, top.pb
-		alo, ahi := box_of(pa)
-		blo, bhi := box_of(pb)
+	// A pair counts as it is made and is kept only when its boxes come
+	// within reach, so the stack holds near pairs.
+	boxes_near :: #force_inline proc "contextless" (alo, ahi, blo, bhi: [2]f64, reach: f64) -> bool {
 		dx := max(alo.x - bhi.x, blo.x - ahi.x, 0)
 		dy := max(alo.y - bhi.y, blo.y - ahi.y, 0)
-		if dx * dx + dy * dy > reach * reach {
-			continue
-		}
-		fa := a.line || chord_flat(pa, flat)
-		fb := b.line || chord_flat(pb, flat)
+		return dx * dx + dy * dy <= reach * reach
+	}
+	if budget^ -= 1; budget^ < 0 {
+		return false
+	}
+	pa, pb := piece_range(a, root[0], root[1]), piece_range(b, root[2], root[3])
+	alo, ahi := box_of(pa)
+	blo, bhi := box_of(pb)
+	if boxes_near(alo, ahi, blo, bhi, reach) {
+		append(&s.stack, Cell_Pair{root, pa, pb, {alo, ahi}, {blo, bhi}, a.line || chord_flat(pa, flat), b.line || chord_flat(pb, flat)})
+	}
+	for len(s.stack) > 0 {
+		top := pop(&s.stack)
+		cell, fa, fb := top.r, top.fa, top.fb
+		pa, pb = top.pa, top.pb
+		alo, ahi, blo, bhi = top.box_a[0], top.box_a[1], top.box_b[0], top.box_b[1]
 		if fa != fb && (beyond_line(pa[0], pa[3], blo, bhi, reach) if fa else beyond_line(pb[0], pb[3], alo, ahi, reach)) {
 			continue
 		}
@@ -188,9 +199,9 @@ near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dyna
 			}
 			continue
 		}
-		// Halve the larger cell that isn't flat (only its controls are new);
-		// cells f64 can't halve any more are compared as they are. Pushed
-		// one at a time, as in curve_winding.
+		// Halve the larger cell that isn't flat (only its controls, box and
+		// flatness are new); cells f64 can't halve any more are compared as
+		// they are. Pushed one at a time, as in curve_winding.
 		split_a := !fa && (fb || box_size(alo, ahi) >= box_size(blo, bhi))
 		ma, mb := (cell[0] + cell[1]) / 2, (cell[2] + cell[3]) / 2
 		if (split_a && (ma <= cell[0] || ma >= cell[1])) || (!split_a && (mb <= cell[2] || mb >= cell[3])) {
@@ -203,12 +214,28 @@ near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dyna
 		}
 		if split_a {
 			q0, q1 := piece_halves(a, cell[0], ma, cell[1], pa)
-			append(&s.stack, Cell_Pair{{cell[0], ma, cell[2], cell[3]}, q0, pb})
-			append(&s.stack, Cell_Pair{{ma, cell[1], cell[2], cell[3]}, q1, pb})
+			for q, h in ([2][4][2]f64{q0, q1}) {
+				if budget^ -= 1; budget^ < 0 {
+					return false
+				}
+				if lo, hi := box_of(q); boxes_near(lo, hi, blo, bhi, reach) {
+					r := cell
+					r[1 - h] = ma
+					append(&s.stack, Cell_Pair{r, q, pb, {lo, hi}, {blo, bhi}, chord_flat(q, flat), fb})
+				}
+			}
 		} else {
 			q0, q1 := piece_halves(b, cell[2], mb, cell[3], pb)
-			append(&s.stack, Cell_Pair{{cell[0], cell[1], cell[2], mb}, pa, q0})
-			append(&s.stack, Cell_Pair{{cell[0], cell[1], mb, cell[3]}, pa, q1})
+			for q, h in ([2][4][2]f64{q0, q1}) {
+				if budget^ -= 1; budget^ < 0 {
+					return false
+				}
+				if lo, hi := box_of(q); boxes_near(alo, ahi, lo, hi, reach) {
+					r := cell
+					r[3 - h] = mb
+					append(&s.stack, Cell_Pair{r, pa, q, {alo, ahi}, {lo, hi}, fa, chord_flat(q, flat)})
+				}
+			}
 		}
 	}
 	merge_runs(a, b, tol, s, out)

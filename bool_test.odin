@@ -263,6 +263,20 @@ test_curve_winding_on_curve :: proc(t: ^testing.T) {
 	testing.expect(t, on)
 }
 
+// A curve that is a point at q holds it under any tolerance: one below 0 or
+// NaN counts as 0 (else no cell was small enough and every one was halved).
+@(test)
+test_curve_winding_bad_tolerance :: proc(t: ^testing.T) {
+	stack: [dynamic][2]f64
+	defer delete(stack)
+	q := [2]f64{3, 4}
+	for tol in ([2]f64{-1, math.nan_f64()}) {
+		w, on := curve_winding({q, q, q, q}, q, tol, &stack)
+		testing.expect_value(t, w, 0)
+		testing.expect(t, on)
+	}
+}
+
 // A straight cubic along a line, its controls uneven so only it is halved:
 // every leaf pairs the line's whole range with a stretch of the cubic, and
 // the leaves make one overlap run, whatever order the search left them in.
