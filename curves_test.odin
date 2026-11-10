@@ -249,7 +249,7 @@ test_format :: proc(t: ^testing.T) {
 		h = (h ~ u64(w)) * 0x100000001b3
 	}
 	testing.expect_value(t, FORMAT, 1)
-	testing.expectf(t, h == 0x7484eba48dbad64e, "words hash %x (%d words)", h, len(words))
+	testing.expectf(t, h == 0x590ae369e09ad64e, "words hash %x (%d words)", h, len(words))
 }
 
 @(test)
@@ -347,30 +347,6 @@ test_small_box_coverage :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_mean_coverage :: proc(t: ^testing.T) {
-	b: Builder
-	defer builder_destroy(&b)
-	square(&b, 0, 0, 10, 10)
-	words, _, _ := built(t, &b)
-	testing.expect_value(t, mean_coverage(words), 1)
-	delete(words)
-
-	// A disc: pi / 4 of its bounds.
-	builder_reset(&b)
-	k :: 0.5522848
-	r: f32 = 10
-	move_to(&b, {r, 0})
-	cubic_to(&b, {r, r * k}, {r * k, r}, {0, r})
-	cubic_to(&b, {-r * k, r}, {-r, r * k}, {-r, 0})
-	cubic_to(&b, {-r, -r * k}, {-r * k, -r}, {0, -r})
-	cubic_to(&b, {r * k, -r}, {r, -r * k}, {r, 0})
-	words, _, _ = built(t, &b)
-	defer delete(words)
-	// Four cubics slightly overshoot a circle (by about 0.03% of its area).
-	testing.expectf(t, abs(mean_coverage(words) - math.PI / 4) < 1e-3, "disc mean %v", mean_coverage(words))
-}
-
-@(test)
 test_footprint :: proc(t: ^testing.T) {
 	b: Builder
 	defer builder_destroy(&b)
@@ -389,11 +365,6 @@ test_footprint :: proc(t: ^testing.T) {
 	c := math.cos(f32(math.PI / 4)) * s
 	rot := matrix[2, 2]f32{c, -c, c, c}
 	testing.expect(t, abs(footprint_of(rot).x - math.SQRT_TWO * s) < 1e-6)
-	// A pixel the size of the whole shape sees its mean; below half the
-	// shape's size coverage is left alone, however fine the bands.
-	testing.expect_value(t, fade(words, 0.25, {1, 1}), mean_coverage(words))
-	testing.expect_value(t, fade(words, 0.25, {0.4, 0.4}), 0.25)
-	testing.expect_value(t, fade(words, 0.25, {s, s}), 0.25)
 }
 
 @(test)
@@ -694,8 +665,9 @@ test_hairline_folded_curve :: proc(t: ^testing.T) {
 	}
 }
 
+// A flat shape builds and covers nothing, even a footprint holding it all.
 @(test)
-test_flat_mean_coverage :: proc(t: ^testing.T) {
+test_flat_shape :: proc(t: ^testing.T) {
 	b: Builder
 	defer builder_destroy(&b)
 	move_to(&b, {0, 5})
@@ -704,8 +676,7 @@ test_flat_mean_coverage :: proc(t: ^testing.T) {
 	words, _, _, ok := build(&b)
 	testing.expect(t, ok)
 	defer delete(words)
-	testing.expect_value(t, mean_coverage(words), f32(0))
-	testing.expect_value(t, fade(words, 0, {10, 10}), f32(0))
+	testing.expect_value(t, coverage(words, {0.5, 0}, {2, 2}, .Non_Zero), f32(0))
 }
 
 @(test)

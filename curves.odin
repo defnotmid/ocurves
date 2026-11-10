@@ -32,7 +32,7 @@
 //	[2] cell width (f32)          [3] cell height (f32)
 //	[4] word offset of the outline, 0 for none
 //	[5] 0 (reserved)
-//	[6] word offset of the curves [7] mean coverage (f32)
+//	[6] word offset of the curves [7] 0 (reserved)
 //	[8..11] bounds min x, min y, max x, max y (f32)
 //	[12..] each cell, row by row: word offset of its piece list, piece
 //	       count, backdrop at its bottom (i32), step count; then each
@@ -49,9 +49,6 @@
 // pieces are in shape units: the source scaled so the shape's larger side is
 // 1 (bounds start at 0); `build` returns the scale and origin back to source
 // units. A piece is listed in every row it crosses.
-//
-// The mean coverage is the fraction of the bounds the shape fills (exact,
-// non-zero): what a pixel covering the whole shape sees (`fade`).
 package curves
 
 import "core:math"
@@ -513,7 +510,7 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 	d := out[base:]
 	d[0], d[1] = u32(nx), u32(ny)
 	d[2], d[3] = transmute(u32)cw, transmute(u32)ch
-	d[4], d[5] = 0, 0
+	d[4], d[5], d[7] = 0, 0, 0
 	d[8], d[9], d[10], d[11] = 0, 0, transmute(u32)size.x, transmute(u32)size.y
 	at := HEADER + 4 * cells
 	for k in 0 ..< cells {
@@ -537,14 +534,6 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 		copy(d[at:][:6], w[:])
 		at += 6
 	}
-	// The fraction of the bounds the shape fills: its signed area (Green's
-	// theorem over each quadratic in closed form) over the bounds'.
-	area: f32
-	for c in mono {
-		cross :: proc "contextless" (a, b: Vec2) -> f32 {return a.x * b.y - a.y * b.x}
-		area += 2 * cross(c.p1, c.p2) + 2 * cross(c.p2, c.p3) + cross(c.p1, c.p3)
-	}
-	d[7] = transmute(u32)(min(abs(area) / 6 / (size.x * size.y), 1) if size.x * size.y > 0 else f32(0))
 	return origin, extent, true
 }
 
@@ -771,11 +760,6 @@ ceil :: #force_inline proc "contextless" (x: f32) -> int {
 // Bounds in shape units.
 bounds :: proc "contextless" (s: []u32) -> (minx, miny, maxx, maxy: f32) {
 	return transmute(f32)s[8], transmute(f32)s[9], transmute(f32)s[10], transmute(f32)s[11]
-}
-
-// The fraction of the bounds the shape fills (non-zero rule).
-mean_coverage :: proc "contextless" (s: []u32) -> f32 {
-	return transmute(f32)s[7]
 }
 
 // The integral over rows [a, b] (relative to `ry`, within the cell's rows)
@@ -1232,7 +1216,7 @@ roots_between :: proc "contextless" (a, b, c, lo, hi: $T) -> (r1, r2: T) {
 
 // The per-axis extent of a pixel's footprint from `j`, the Jacobian of
 // shape units by pixel coordinates: the box enclosing its parallelogram, as
-// `fwidth` gives (for bounds, `coverage` of that box, and `fade`).
+// `fwidth` gives (for bounds, and `coverage` of that box).
 footprint_of :: proc "contextless" (j: matrix[2, 2]f32) -> Vec2 {
 	return {abs(j[0, 0]) + abs(j[0, 1]), abs(j[1, 0]) + abs(j[1, 1])}
 }
@@ -1241,15 +1225,6 @@ footprint_of :: proc "contextless" (j: matrix[2, 2]f32) -> Vec2 {
 // by pixel coordinates (`j[0, 1]` = d shape.x / d pixel.y).
 coverage_jacobian :: proc "contextless" (s: []u32, rc: Vec2, j: matrix[2, 2]f32, rule: Fill_Rule) -> f32 {
 	return coverage_affine(s, rc, {j[0, 0], j[1, 0]}, {j[0, 1], j[1, 1]}, rule)
-}
-
-// `cov` blended toward the shape's mean coverage as the footprint grows
-// from half the shape's size to all of it (along either axis).
-fade :: proc "contextless" (s: []u32, cov: f32, footprint: Vec2) -> f32 {
-	size := Vec2{transmute(f32)s[10], transmute(f32)s[11]}
-	k := max(footprint.x / max(size.x, 1e-6), footprint.y / max(size.y, 1e-6))
-	t := clamp(2 * k - 1, 0, 1)
-	return cov + (mean_coverage(s) - cov) * t
 }
 
 // The winding number at `p` (shape units): the signed count of the curves

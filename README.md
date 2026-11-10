@@ -20,8 +20,7 @@ shapes and text in 3D.
   number right of it), in time linear in the pieces. Reading the words:
   `coverage` of a box footprint, `coverage_affine` of any parallelogram,
   `coverage_jacobian` from a 3D footprint's Jacobian, `winding` at a point,
-  `mean_coverage` and `fade` for a shape smaller than a pixel, `bounds` and
-  `hairline` (the contours as thin lines); `marker` covers a pixel by a
+  `bounds` and `hairline` (the contours as thin lines); `marker` covers a pixel by a
   square or circle marker without any words. A pixel's coverage
   is the area of its footprint inside the shape, in closed form (Green's
   theorem) over the pieces in the cells it covers plus the backdrop over

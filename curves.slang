@@ -464,19 +464,6 @@ float2 curves_footprint(float2 dx, float2 dy) {
     return abs(dx) + abs(dy);
 }
 
-// The fraction of the bounds the shape fills (non-zero rule).
-float curves_mean_coverage(StructuredBuffer<uint> words, uint s) {
-    return curves_f(words, s + 7);
-}
-
-// `cov` blended toward the mean coverage as the footprint grows from half
-// the shape's size to all of it.
-float curves_fade(StructuredBuffer<uint> words, uint s, float cov, float2 footprint) {
-    float2 size = float2(curves_f(words, s + 10), curves_f(words, s + 11));
-    float k = max(footprint.x / max(size.x, 1e-6), footprint.y / max(size.y, 1e-6));
-    return lerp(cov, curves_mean_coverage(words, s), clamp(2.0 * k - 1.0, 0.0, 1.0));
-}
-
 // The winding number at `p` (shape units): signed crossings of the ray
 // toward +x (non-zero: != 0; even-odd: odd). For sample masks.
 int curves_winding(StructuredBuffer<uint> words, uint s, float2 p) {
