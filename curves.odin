@@ -1320,20 +1320,28 @@ band_coverage :: #force_inline proc "contextless" (p1, p2, p3: Vec2, w: f32) -> 
 	}
 	// From the chord's nearest point, Newton on B(t) . B'(t) = 0.
 	t := clamp(-(p1.x * chord.x + p1.y * chord.y) / l2, 0, 1) if l2 > 0 else 0
-	for _ in 0 ..< 3 {
-		q := (a * t + b) * t + p1
-		dq := 2 * a * t + b
-		f := q.x * dq.x + q.y * dq.y
-		fp := dq.x * dq.x + dq.y * dq.y + 2 * (q.x * a.x + q.y * a.y)
-		if fp > 0 {
-			t = clamp(t - f / fp, 0, 1)
+	// A piece within 1/400 pixel of its chord (|a| / 4 apart at most) is
+	// taken as its chord, whose nearest point is in closed form, so the
+	// normal there is the chord's; any other gets Newton's.
+	q := p1 + chord * t
+	if a.x * a.x + a.y * a.y > 1e-4 {
+		for _ in 0 ..< 3 {
+			qk := (a * t + b) * t + p1
+			dq := 2 * a * t + b
+			f := qk.x * dq.x + qk.y * dq.y
+			fp := dq.x * dq.x + dq.y * dq.y + 2 * (qk.x * a.x + qk.y * a.y)
+			if fp > 0 {
+				t = clamp(t - f / fp, 0, 1)
+			}
 		}
+		q = (a * t + b) * t + p1
 	}
-	q := (a * t + b) * t + p1
-	d := math.sqrt(q.x * q.x + q.y * q.y)
-	if d >= 0.5 * w + 0.7072 {
+	d2 := q.x * q.x + q.y * q.y
+	reach := 0.5 * w + 0.7072
+	if d2 >= reach * reach {
 		return 0
 	}
+	d := math.sqrt(d2)
 	n := q / d
 	if !(d > 1e-6) {
 		dq := 2 * a * t + b

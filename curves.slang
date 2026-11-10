@@ -514,16 +514,24 @@ float curves_band_coverage(float2 p1, float2 p2, float2 p3, float w) {
     float l2 = dot(chord, chord);
     if (l2 == 0.0 && all(a == float2(0.0, 0.0))) return 0.0;
     float t = l2 > 0.0 ? clamp(-dot(p1, chord) / l2, 0.0, 1.0) : 0.0;
-    for (int k = 0; k < 3; k++) {
-        float2 q = (a * t + b) * t + p1;
-        float2 dq = 2.0 * a * t + b;
-        float f = dot(q, dq);
-        float fp = dot(dq, dq) + 2.0 * dot(q, a);
-        if (fp > 0.0) t = clamp(t - f / fp, 0.0, 1.0);
+    // A piece within 1/400 pixel of its chord (|a| / 4 apart at most) is
+    // taken as its chord, whose nearest point is in closed form, so the
+    // normal there is the chord's; any other gets Newton's.
+    float2 q = p1 + chord * t;
+    if (dot(a, a) > 1e-4) {
+        for (int k = 0; k < 3; k++) {
+            float2 qk = (a * t + b) * t + p1;
+            float2 dq = 2.0 * a * t + b;
+            float f = dot(qk, dq);
+            float fp = dot(dq, dq) + 2.0 * dot(qk, a);
+            if (fp > 0.0) t = clamp(t - f / fp, 0.0, 1.0);
+        }
+        q = (a * t + b) * t + p1;
     }
-    float2 q = (a * t + b) * t + p1;
-    float d = sqrt(dot(q, q));
-    if (d >= 0.5 * w + 0.7072) return 0.0;
+    float d2 = dot(q, q);
+    float reach = 0.5 * w + 0.7072;
+    if (d2 >= reach * reach) return 0.0;
+    float d = sqrt(d2);
     float2 n = q / d;
     if (!(d > 1e-6)) {
         float2 dq = 2.0 * a * t + b;
