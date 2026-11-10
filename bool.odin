@@ -115,7 +115,6 @@ Bool_Scratch :: struct {
 	comp:    [dynamic]u32,
 	cleft:   [dynamic]u32, // per component root: its leftmost vertex
 	queue:   [dynamic]u32,
-	stack:   [dynamic][2]f64,
 	keep:    [dynamic]bool,
 	used:    [dynamic]bool,
 	counts:  [dynamic]u32, // per vertex, reused by stages
@@ -171,6 +170,33 @@ Bool_Edge :: struct {
 	alive:  bool,
 }
 
+// Empties s and has all its tables grow with `allocator`, as contours_init
+// does for a Contours. A zero Bool_Scratch works too, each table then
+// taking the context's allocator when it first grows: different ones when
+// a scratch is reused under different allocators (per-thread arenas).
+bool_scratch_init :: proc(s: ^Bool_Scratch, allocator := context.allocator) {
+	s^ = {}
+	a := allocator
+	s.rows.allocator, s.pieces.allocator, s.pnode.allocator, s.pdelta.allocator = a, a, a, a
+	s.boxes.allocator, s.eboxes.allocator, s.order.allocator, s.keys.allocator = a, a, a, a
+	s.tkeys.allocator, s.torder.allocator, s.cells.allocator, s.cand.allocator = a, a, a, a
+	s.kernel.stack.allocator, s.kernel.leaves.allocator, s.runs.allocator = a, a, a
+	s.cuts.allocator, s.tcuts.allocator, s.pstart.allocator, s.plist.allocator = a, a, a, a
+	s.pts.allocator, s.input.allocator, s.parent.allocator, s.vert.allocator = a, a, a, a
+	s.vfirst.allocator, s.vpos.allocator, s.vrad.allocator, s.vout.allocator = a, a, a, a
+	s.edges.allocator, s.ecurve.allocator, s.edelta.allocator, s.hdir.allocator = a, a, a, a
+	s.vstart.allocator, s.vlist.allocator, s.hpos.allocator, s.hnext.allocator = a, a, a, a
+	s.hface.allocator, s.fhalf.allocator, s.farea.allocator, s.fwind.allocator = a, a, a, a
+	s.fdone.allocator, s.inside.allocator, s.comp.allocator, s.cleft.allocator = a, a, a, a
+	s.queue.allocator, s.keep.allocator, s.used.allocator, s.counts.allocator, s.placed.allocator = a, a, a, a, a
+	contours_init(&s.out, a)
+	s.out_row.allocator, s.out_t.allocator, s.faces.allocator, s.faces_in.allocator = a, a, a, a
+	s.fcomp.allocator, s.fbox.allocator, s.cparent.allocator, s.fregion.allocator = a, a, a, a
+	s.oface.allocator, s.ohole.allocator, s.oorder.allocator = a, a, a
+	contours_init(&s.ordered, a)
+	s.ordered_row.allocator, s.ordered_t.allocator = a, a
+}
+
 bool_scratch_destroy :: proc(s: ^Bool_Scratch) {
 	delete(s.rows)
 	delete(s.pieces)
@@ -215,7 +241,6 @@ bool_scratch_destroy :: proc(s: ^Bool_Scratch) {
 	delete(s.comp)
 	delete(s.cleft)
 	delete(s.queue)
-	delete(s.stack)
 	delete(s.keep)
 	delete(s.used)
 	delete(s.counts)
@@ -435,7 +460,7 @@ face_holder :: proc(s: ^Bool_Scratch, f: int, kept: bool) -> (holder: u32) {
 			if h & 1 == 1 {
 				c = {c[3], c[2], c[1], c[0]}
 			}
-			cw, _ := curve_winding(c, q, 0, &s.stack)
+			cw, _ := curve_winding(c, q, 0)
 			w += cw
 			h = s.hnext[h]
 			if h == s.fhalf[g] {
@@ -1696,7 +1721,7 @@ bool_windings :: proc(s: ^Bool_Scratch, k: int, eps: f64) -> Bool_Error {
 				if !e2.alive || q.y < b[0].y || q.y > b[1].y || b[1].x < q.x || s.comp[e2.v0] == root {
 					continue
 				}
-				cw, on := curve_winding(s.ecurve[j], q, eps / 64, &s.stack)
+				cw, on := curve_winding(s.ecurve[j], q, eps / 64)
 				if on {
 					return .Inconsistent
 				}

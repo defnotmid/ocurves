@@ -64,7 +64,8 @@ shapes and text in 3D.
   into vertices, edges along the same curve between the same vertices
   merge with their windings summed, faces are walked and each face's
   winding per operand propagated. Every table is the caller's
-  `Bool_Scratch`: no allocation once it is warm. The work is bounded by a
+  `Bool_Scratch`: no allocation once it is warm (`bool_scratch_init` puts
+  all its tables on one allocator). The work is bounded by a
   budget (`DEFAULT_BUDGET`, 4,000,000 kernel cell pairs and snap-round
   points) against degenerate input; every glyph of Bitstream Vera (264)
   and Adwaita Sans (2,915), simplified, takes at most 268 and 8,549.

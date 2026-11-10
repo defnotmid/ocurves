@@ -173,19 +173,19 @@ contours_end :: proc(c: ^Contours, closed, reversed: bool) {
 // The winding of q about contours [first, first + count), an open contour
 // closed by a line (as fills close it): exact, by curve_winding. `on`
 // reports q on an outline, or within `on_tol` of one.
-contours_winding :: proc(c: ^Contours, first, count: int, q: [2]f64, stack: ^[dynamic][2]f64, on_tol := 0.0) -> (w: i32, on: bool) {
+contours_winding :: proc "contextless" (c: ^Contours, first, count: int, q: [2]f64, on_tol := 0.0) -> (w: i32, on: bool) {
 	f :: #force_inline proc "contextless" (v: Vec2) -> [2]f64 {
 		return {f64(v.x), f64(v.y)}
 	}
 	for i in first ..< first + count {
 		it := contour_segments(c, i)
 		for s in segments_next(&it) {
-			cw, con := curve_winding({f(s.p[0]), f(s.p[1]), f(s.p[2]), f(s.p[3])}, q, on_tol, stack)
+			cw, con := curve_winding({f(s.p[0]), f(s.p[1]), f(s.p[2]), f(s.p[3])}, q, on_tol)
 			w += cw
 			on ||= con
 		}
 		if a, b := c.pts[it.at - 1], c.pts[c.contours[i].start]; a != b {
-			cw, con := curve_winding({f(a), f(a + (b - a) / 3), f(a + (b - a) * (2.0 / 3)), f(b)}, q, on_tol, stack)
+			cw, con := curve_winding({f(a), f(a + (b - a) / 3), f(a + (b - a) * (2.0 / 3)), f(b)}, q, on_tol)
 			w += cw
 			on ||= con
 		}

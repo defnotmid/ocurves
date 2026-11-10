@@ -1,7 +1,9 @@
 package curves
 
+import "base:runtime"
 import "core:math"
 import "core:math/rand"
+import "core:mem"
 import "core:testing"
 
 @(private = "file")
@@ -59,8 +61,6 @@ test_monotone_pieces :: proc(t: ^testing.T) {
 
 @(test)
 test_curve_winding :: proc(t: ^testing.T) {
-	stack: [dynamic][2]f64
-	defer delete(stack)
 	// Chords against the ray from the origin, half-open in y.
 	Case :: struct {
 		a, b: [2]f64,
@@ -77,7 +77,7 @@ test_curve_winding :: proc(t: ^testing.T) {
 		{{-1, -1}, {3, 1}, 1}, // crosses right of the point
 	}
 	for c in cases {
-		w, on := curve_winding(line_cubic(c.a, c.b), {0, 0}, 1e-12, &stack)
+		w, on := curve_winding(line_cubic(c.a, c.b), {0, 0}, 1e-12)
 		testing.expectf(t, w == c.w && !on, "%v -> %v: %d", c.a, c.b, w)
 	}
 	// A circle of four cubics: 1 inside, even with the ray through a joint,
@@ -90,23 +90,23 @@ test_curve_winding :: proc(t: ^testing.T) {
 		{{-r, 0}, {-r, -r * K}, {-r * K, -r}, {0, -r}},
 		{{0, -r}, {r * K, -r}, {r, -r * K}, {r, 0}},
 	}
-	wind :: proc(circle: [4][4][2]f64, q: [2]f64, stack: ^[dynamic][2]f64) -> (w: i32, on: bool) {
+	wind :: proc(circle: [4][4][2]f64, q: [2]f64) -> (w: i32, on: bool) {
 		for c in circle {
-			cw, con := curve_winding(c, q, 1e-9, stack)
+			cw, con := curve_winding(c, q, 1e-9)
 			w += cw
 			on ||= con
 		}
 		return
 	}
 	for q in ([?][2]f64{{0, 0}, {5, 0}, {-3, 7}, {9.9, 0}}) {
-		w, on := wind(circle, q, &stack)
+		w, on := wind(circle, q)
 		testing.expectf(t, abs(w) == 1 && !on, "%v: %d", q, w)
 	}
 	for q in ([?][2]f64{{11, 0}, {-10.1, 0}, {8, 8}, {0, 20}}) {
-		w, _ := wind(circle, q, &stack)
+		w, _ := wind(circle, q)
 		testing.expectf(t, w == 0, "%v: %d", q, w)
 	}
-	_, on := wind(circle, {r, 0}, &stack)
+	_, on := wind(circle, {r, 0})
 	testing.expect(t, on)
 }
 
@@ -252,14 +252,14 @@ test_near_runs_scale :: proc(t: ^testing.T) {
 }
 
 // A point exactly on the curve with no tolerance: the halving stops where
-// f64 can't split a cell and reports it on the curve.
+// f64 can't split a cell and reports it on the curve. (1, 1) is the line's
+// middle, which both halves hold: the search towards it from the left
+// steps right every time, the stack's deepest (54).
 @(test)
 test_curve_winding_on_curve :: proc(t: ^testing.T) {
-	stack: [dynamic][2]f64
-	defer delete(stack)
-	_, on := curve_winding(line_cubic({0, 0}, {2, 2}), {1, 1}, 0, &stack)
+	_, on := curve_winding(line_cubic({0, 0}, {2, 2}), {1, 1}, 0)
 	testing.expect(t, on)
-	_, on = curve_winding({{0, 0}, {1, 2}, {3, 2}, {4, 0}}, {2, 1.5}, 0, &stack)
+	_, on = curve_winding({{0, 0}, {1, 2}, {3, 2}, {4, 0}}, {2, 1.5}, 0)
 	testing.expect(t, on)
 }
 
@@ -267,11 +267,9 @@ test_curve_winding_on_curve :: proc(t: ^testing.T) {
 // NaN counts as 0 (else no cell was small enough and every one was halved).
 @(test)
 test_curve_winding_bad_tolerance :: proc(t: ^testing.T) {
-	stack: [dynamic][2]f64
-	defer delete(stack)
 	q := [2]f64{3, 4}
 	for tol in ([2]f64{-1, math.nan_f64()}) {
-		w, on := curve_winding({q, q, q, q}, q, tol, &stack)
+		w, on := curve_winding({q, q, q, q}, q, tol)
 		testing.expect_value(t, w, 0)
 		testing.expect(t, on)
 	}
@@ -355,7 +353,7 @@ test_bool_regions :: proc(t: ^testing.T) {
 	for q in ([3][2]f64{{1, 1}, {5, 5}, {12, 12}}) {
 		n := 0
 		for r in s.faces {
-			if w, _ := contours_winding(&s.out, int(r.x), int(r.y), q, &s.stack); w != 0 {
+			if w, _ := contours_winding(&s.out, int(r.x), int(r.y), q); w != 0 {
 				n += 1
 				testing.expect_value(t, r.y, 2 if q.x == 1 else 1)
 			}
@@ -513,4 +511,49 @@ test_merge_runs_bridging :: proc(t: ^testing.T) {
 		testing.expect_value(t, len(runs), c.count)
 		testing.expect_value(t, runs[len(runs) - 1], c.want)
 	}
+}
+
+// bool_scratch_init binds every table, nested ones too, to its allocator,
+// and booleans run in the scratch keep them there.
+@(test)
+test_bool_scratch_init :: proc(t: ^testing.T) {
+	buf := make([]byte, 1 << 20)
+	defer delete(buf)
+	arena: mem.Arena
+	mem.arena_init(&arena, buf)
+	a := mem.arena_allocator(&arena)
+	// Every dynamic array in the scratch, by its type's fields.
+	bound :: proc(t: ^testing.T, p: rawptr, ti: ^runtime.Type_Info, a: runtime.Allocator, name: string) {
+		#partial switch v in runtime.type_info_base(ti).variant {
+		case runtime.Type_Info_Dynamic_Array:
+			got := (^runtime.Raw_Dynamic_Array)(p).allocator
+			testing.expectf(t, got.procedure == a.procedure && got.data == a.data, "%s", name)
+		case runtime.Type_Info_Struct:
+			for i in 0 ..< int(v.field_count) {
+				bound(t, rawptr(uintptr(p) + v.offsets[i]), v.types[i], a, v.names[i])
+			}
+		}
+	}
+	s: Bool_Scratch
+	bool_scratch_init(&s, a)
+	bound(t, &s, type_info_of(Bool_Scratch), a, "Bool_Scratch")
+	c: Contours
+	contours_init(&c, a)
+	for o in 0 ..< 2 {
+		x := f32(o) * 5
+		contours_begin(&c, {x, 0})
+		contours_line(&c, {x + 10, 0})
+		contours_line(&c, {x + 10, 10})
+		contours_line(&c, {x, 10})
+		contours_end(&c, true, false)
+	}
+	inputs := [2]Bool_Input{{0, 1, .Non_Zero}, {1, 1, .Non_Zero}}
+	budget := DEFAULT_BUDGET
+	testing.expect_value(t, bool_run(&s, &c, inputs[:], .Union, &budget), nil)
+	testing.expect_value(t, len(s.out.contours), 1)
+	budget = DEFAULT_BUDGET
+	testing.expect_value(t, bool_divide(&s, &c, inputs[:], &budget), nil)
+	testing.expect_value(t, len(s.faces), 3)
+	bound(t, &s, type_info_of(Bool_Scratch), a, "Bool_Scratch")
+	testing.expect(t, arena.offset > 0)
 }

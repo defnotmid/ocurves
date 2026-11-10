@@ -93,11 +93,22 @@ monotone_pieces :: proc(q: [4][2]f64, line: bool, row: u32, operand: u16, flat: 
 // is halved until each cell's control box misses q; a cell right of q
 // crosses as its chord does, any other cell misses the ray. `on` reports q
 // within `on_tol` of the curve (a cell that small still holds it).
-curve_winding :: proc(p: [4][2]f64, q: [2]f64, on_tol: f64, stack: ^[dynamic][2]f64) -> (w: i32, on: bool) {
+curve_winding :: proc "contextless" (p: [4][2]f64, q: [2]f64, on_tol: f64) -> (w: i32, on: bool) {
 	// A negative or NaN tolerance is none: under it a cell that is a point
 	// at q is never small enough, and every cell would be halved.
 	on_tol := on_tol if on_tol > 0 else 0
-	clear(stack)
+	// The cells left to search. A halved cell's left half goes on first, so
+	// its right half comes off first and is searched through; what waits is
+	// one left half for each step right on the way to the cell searched,
+	// each a 1 in the binary digits of where that cell starts (exact, as
+	// halving [0, 1] is), of which f64 holds 52 while the cell can still be
+	// halved: 54 with the two just pushed. Pushed the other way round, a
+	// search towards 0 would leave a right half for each of up to 1074
+	// steps. Only what was pushed is read, so it starts unset (zeroing it
+	// cost more than most curves' whole search, which ends at the first
+	// cell).
+	stack: [64][2]f64 = ---
+	n := 0
 	// The curve is the first cell, as it is: most curves end there.
 	r := [2]f64{0, 1}
 	c := p
@@ -111,15 +122,14 @@ curve_winding :: proc(p: [4][2]f64, q: [2]f64, on_tol: f64, stack: ^[dynamic][2]
 			// A cell this small, or one f64 can't halve any more, holds q.
 			on = true
 		} else {
-			// One at a time: a single append stores in place, two copy
-			// through memmove.
-			append(stack, [2]f64{r[0], m})
-			append(stack, [2]f64{m, r[1]})
+			stack[n], stack[n + 1] = {r[0], m}, {m, r[1]}
+			n += 2
 		}
-		if len(stack) == 0 {
+		if n == 0 {
 			return
 		}
-		r = pop(stack)
+		n -= 1
+		r = stack[n]
 		c = cubic_range(p, r[0], r[1])
 	}
 }
@@ -201,7 +211,8 @@ near_runs :: proc(a, b: ^Piece, tol, delta: f64, s: ^Kernel_Scratch, out: ^[dyna
 		}
 		// Halve the larger cell that isn't flat (only its controls, box and
 		// flatness are new); cells f64 can't halve any more are compared as
-		// they are. Pushed one at a time, as in curve_winding.
+		// they are. Pushed one at a time: a single append stores in place,
+		// two copy through memmove.
 		split_a := !fa && (fb || box_size(alo, ahi) >= box_size(blo, bhi))
 		ma, mb := (cell[0] + cell[1]) / 2, (cell[2] + cell[3]) / 2
 		if (split_a && (ma <= cell[0] || ma >= cell[1])) || (!split_a && (mb <= cell[2] || mb >= cell[3])) {
