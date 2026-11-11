@@ -47,8 +47,9 @@
 //
 // Cell (i, j) spans x in [i, i + 1] * width, y in [j, j + 1] * height;
 // pieces are in shape units: the source scaled so the shape's larger side is
-// 1 (bounds start at 0); `build` returns the scale and origin back to source
-// units. A piece is listed in every row it crosses.
+// 1 (bounds start at 0), or mapped by a frame given to `build_append`;
+// `build` returns the scale and origin back to source units. A piece is
+// listed in every row it crosses.
 package curves
 
 import "core:math"
@@ -288,10 +289,20 @@ build :: proc(b: ^Builder, allocator := context.allocator, search := true) -> (w
 	return out[:], origin, extent, true
 }
 
+// A map from source units to shape units, `q = (p - origin) / extent`, as
+// `build` returns it.
+Frame :: struct {
+	origin: Vec2,
+	extent: f32,
+}
+
 // `build`, appending the words to `out` (reserved exactly when nothing is
 // allocated, geometrically as shapes are appended); `out` is unchanged when
-// false.
-build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin: Vec2, extent: f32, ok: bool) {
+// false. With a `frame` the curves map to shape units by it instead of by
+// their own bounds, so a simplified copy of a shape can share its map: false
+// unless the curves lie inside it (origin to origin + extent on both axes),
+// and the bounds are the curves' own in that frame.
+build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true, frame: Maybe(Frame) = nil) -> (origin: Vec2, extent: f32, ok: bool) {
 	close(b)
 	if len(b.curves) == 0 {
 		return
@@ -326,10 +337,20 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 		return
 	}
 	origin = lo
-	for &c in mono {
-		c = {(c.p1 - lo) * inv, (c.p2 - lo) * inv, (c.p3 - lo) * inv}
+	if f, framed := frame.?; framed {
+		// Inside it, its extent is at least the curves' and every point less
+		// its origin is finite (rounding is monotone).
+		o := f.origin
+		if !(lo.x >= o.x && lo.y >= o.y && hi.x - o.x <= f.extent && hi.y - o.y <= f.extent) || math.is_inf(f.extent) {
+			return
+		}
+		origin, extent = o, f.extent
+		inv = 1 / extent
 	}
-	size := (hi - lo) * inv
+	for &c in mono {
+		c = {(c.p1 - origin) * inv, (c.p2 - origin) * inv, (c.p3 - origin) * inv}
+	}
+	start, size := (lo - origin) * inv, (hi - origin) * inv
 
 	// The grid: the cell size (of n per unit) keeping the fullest cell
 	// smallest, fewer cells on a tie.
@@ -517,7 +538,7 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 	d[0], d[1] = u32(nx), u32(ny)
 	d[2], d[3] = transmute(u32)cw, transmute(u32)ch
 	d[4], d[5], d[7] = 0, 0, 0
-	d[8], d[9], d[10], d[11] = 0, 0, transmute(u32)size.x, transmute(u32)size.y
+	d[8], d[9], d[10], d[11] = transmute(u32)start.x, transmute(u32)start.y, transmute(u32)size.x, transmute(u32)size.y
 	at := HEADER + 4 * cells
 	for k in 0 ..< cells {
 		cell := d[HEADER + 4 * k:][:4]

@@ -14,7 +14,8 @@ shapes and text in 3D.
 
 - **Shapes** (`curves.odin`): a `Builder` takes contours (`move_to`,
   `line_to`, `quad_to`, `cubic_to`, `close`, `end_open`, `orient`) and
-  `build` / `build_append` write the shape as one block of 32-bit words:
+  `build` / `build_append` (in its own frame or a given `Frame`) write the
+  shape as one block of 32-bit words:
   quadratic pieces, each monotone in x and y, cut into the columns of a grid
   of cells, each cell listing its pieces and its backdrop (the winding
   number right of it), in time linear in the pieces. Reading the words:

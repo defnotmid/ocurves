@@ -824,3 +824,67 @@ test_build_append_outline :: proc(t: ^testing.T) {
 		testing.expect_value(t, len(small), 0)
 	}
 }
+
+@(test)
+test_build_append_frame :: proc(t: ^testing.T) {
+	// Part of a shape's curves built in the shape's frame: shape units are
+	// the shape's, so one map serves both.
+	fill :: proc(b: ^Builder, whole: bool) {
+		builder_reset(b)
+		if whole {
+			square(b, 10, 20, 100, 60)
+		}
+		square(b, 40, 30, 20, 20)
+		move_to(b, {70, 40})
+		quad_to(b, {90, 75}, {100, 40})
+		close(b)
+	}
+	b: Builder
+	defer builder_destroy(&b)
+	fill(&b, true)
+	words, origin, extent, ok := build(&b)
+	testing.expect(t, ok)
+	defer delete(words)
+	frame := Frame{origin, extent}
+	// Its own frame changes nothing.
+	out: [dynamic]u32
+	defer delete(out)
+	fill(&b, true)
+	_, _, ok = build_append(&b, &out, frame = frame)
+	testing.expect(t, ok && slice.equal(out[:], words))
+	clear(&out)
+	fill(&b, false)
+	o, e, framed := build_append(&b, &out, frame = frame)
+	testing.expect(t, framed && o == origin && e == extent)
+	part := out[:]
+	inv := 1 / extent
+	x0, y0, x1, y1 := bounds(part)
+	testing.expect_value(t, Vec2{x0, y0}, (Vec2{40, 30} - origin) * inv)
+	// The quad peaks at y = 57.5.
+	testing.expect_value(t, Vec2{x1, y1}, (Vec2{100, 57.5} - origin) * inv)
+	// It covers what it does built alone.
+	fill(&b, false)
+	alone, ao, ae, _ := build(&b)
+	defer delete(alone)
+	worst: f32
+	for y in 0 ..< 24 {
+		for x in 0 ..< 24 {
+			q := Vec2{f32(x) * 5 + 0.25, f32(y) * 5 + 0.25}
+			testing.expect_value(t, winding(part, (q - origin) * inv), winding(alone, (q - ao) / ae))
+			got := coverage(part, (q - origin) * inv, Vec2{2.5, 2.5} * inv, .Non_Zero)
+			want := coverage(alone, (q - ao) / ae, Vec2{2.5, 2.5} / ae, .Non_Zero)
+			worst = max(worst, abs(got - want))
+		}
+	}
+	testing.expectf(t, worst < 1e-4, "worst %v", worst)
+	// Curves leaving the frame, or a frame that maps nothing: false, and
+	// `out` unchanged.
+	nan := math.nan_f32()
+	inf := math.inf_f32(1)
+	for f in ([6]Frame{{origin + {1e-3, 0}, extent}, {origin + {0, 1e-3}, extent}, {origin, extent * 0.999}, {origin, nan}, {origin, inf}, {{nan, origin.y}, extent}}) {
+		fill(&b, true)
+		_, _, framed = build_append(&b, &out, frame = f)
+		testing.expectf(t, !framed, "frame %v", f)
+		testing.expect_value(t, len(out), len(part))
+	}
+}
