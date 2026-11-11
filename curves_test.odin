@@ -770,3 +770,57 @@ test_build_append_out_of_memory :: proc(t: ^testing.T) {
 	testing.expect(t, !ok)
 	testing.expect_value(t, len(out), 0)
 }
+
+@(test)
+test_build_append_outline :: proc(t: ^testing.T) {
+	// Appended after other words, a shape keeps the words `build` gives it,
+	// its outline too: every offset is from the shape's first word.
+	I :: [6]f32{1, 0, 0, 1, 0, 0}
+	shape :: proc(b: ^Builder) {
+		builder_reset(b)
+		b.outline = true
+		move_to(b, {10, 10})
+		line_to(b, {50, 90})
+		line_to(b, {90, 10})
+		end_open(b)
+		square(b, 120, 10, 40, 40)
+	}
+	for search in ([2]bool{true, false}) {
+		b: Builder
+		defer builder_destroy(&b)
+		shape(&b)
+		words, origin, extent, ok := build(&b, search = search)
+		testing.expect(t, ok)
+		defer delete(words)
+		out: [dynamic]u32
+		defer delete(out)
+		append(&out, 7, 7, 7)
+		for _ in 0 ..< 2 {
+			shape(&b)
+			o, e, appended := build_append(&b, &out, search)
+			testing.expect(t, appended && o == origin && e == extent)
+		}
+		n := len(words)
+		testing.expect_value(t, len(out), 3 + 2 * n)
+		testing.expect(t, slice.equal(out[:3], []u32{7, 7, 7}))
+		for k in 0 ..< 2 {
+			s := out[3 + k * n:][:n]
+			testing.expect(t, slice.equal(s, words))
+			// The V's closing edge is not drawn; the square's bottom is.
+			testing.expect_value(t, hairline_at(s, origin, extent, I, 50, 9.5, 1), 0)
+			testing.expect(t, abs(hairline_at(s, origin, extent, I, 140, 9.5, 1) - 1) < 1e-3)
+		}
+		// The outline is last: room for the words before it only, and
+		// nothing is appended.
+		testing.expect(t, 0 < words[4] && int(words[4]) < n)
+		buf := make([]u8, 4 * int(words[4]))
+		defer delete(buf)
+		arena: mem.Arena
+		mem.arena_init(&arena, buf)
+		small := make([dynamic]u32, mem.arena_allocator(&arena))
+		shape(&b)
+		_, _, appended := build_append(&b, &small, search)
+		testing.expect(t, !appended)
+		testing.expect_value(t, len(small), 0)
+	}
+}

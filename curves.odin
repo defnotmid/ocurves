@@ -285,14 +285,12 @@ build :: proc(b: ^Builder, allocator := context.allocator, search := true) -> (w
 		delete(out)
 		return
 	}
-	if b.outline {
-		append_outline(b, &out, 0)
-	}
 	return out[:], origin, extent, true
 }
 
 // `build`, appending the words to `out` (reserved exactly when nothing is
-// allocated, geometrically as shapes are appended), without an outline.
+// allocated, geometrically as shapes are appended); `out` is unchanged when
+// false.
 build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin: Vec2, extent: f32, ok: bool) {
 	close(b)
 	if len(b.curves) == 0 {
@@ -501,7 +499,15 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 		}
 	}
 
+	// The outline goes after the pieces.
+	outline: []u32
+	if b.outline {
+		outline = outline_lists(b, pieces, places, ch, nx, ny)
+	}
 	n := HEADER + 4 * cells + len(lists) + 2 * kept + 6 * len(pieces)
+	if b.outline {
+		n += 2 * cells + len(outline)
+	}
 	base := len(out)
 	grow(out, n)
 	if resize(out, base + n) != nil {
@@ -534,15 +540,27 @@ build_append :: proc(b: ^Builder, out: ^[dynamic]u32, search := true) -> (origin
 		copy(d[at:][:6], w[:])
 		at += 6
 	}
+	if b.outline {
+		d[4] = u32(at)
+		spans := s.outline_starts[:]
+		list_at := at + 2 * cells
+		for k in 0 ..< cells {
+			d[at + 2 * k], d[at + 2 * k + 1] = u32(list_at + spans[k]), u32(spans[k + 1] - spans[k])
+		}
+		copy(d[list_at:], outline)
+	}
 	return origin, extent, true
 }
 
-// Appends the outline to the shape build_append just wrote at `out[base:]`
-// (its pieces still in the scratch) and points the header at it. The mono
-// pieces of the curves it skips: a curve's are its splits plus one.
+// Each cell's list of the pieces an outline draws (`s.outline_starts`
+// spans them): those the cell's rows list, and horizontal ones in their
+// row, without the pieces of the curves it skips (`s.hidden` holds their
+// mono pieces: a curve's are its splits plus one). A mono piece's pieces
+// are a run ending at its end point.
 @(private = "file")
-append_outline :: proc(b: ^Builder, out: ^[dynamic]u32, base: int) {
+outline_lists :: proc(b: ^Builder, pieces: []Curve, places: []Place, ch: f32, nx, ny: int) -> []u32 {
 	s := &b.scratch
+	mono := s.mono[:]
 	clear(&s.hidden)
 	m, u := 0, 0
 	for c, k in b.curves {
@@ -555,30 +573,10 @@ append_outline :: proc(b: ^Builder, out: ^[dynamic]u32, base: int) {
 		}
 		m += n + 1
 	}
-	nx, ny := int(out[base]), int(out[base + 1])
-	lists := outline_lists(s, s.pieces[:], s.places[:], s.mono[:], transmute(f32)out[base + 3], nx, ny)
-	cells := nx * ny
-	at := len(out) - base
-	resize(out, len(out) + 2 * cells + len(lists))
-	d := out[base:]
-	d[4] = u32(at)
-	starts := s.outline_starts[:]
-	list_at := at + 2 * cells
-	for k in 0 ..< cells {
-		d[at + 2 * k], d[at + 2 * k + 1] = u32(list_at + starts[k]), u32(starts[k + 1] - starts[k])
-	}
-	copy(d[list_at:], lists)
-}
-
-// Each cell's list of the pieces an outline draws (`s.outline_starts`
-// spans them): those the cell's rows list, and horizontal ones in their
-// row, without the pieces of `s.hidden`'s mono pieces. A mono piece's
-// pieces are a run ending at its end point.
-@(private = "file")
-outline_lists :: proc(s: ^Scratch, pieces: []Curve, places: []Place, mono: []Curve, ch: f32, nx, ny: int) -> []u32 {
 	resize(&s.drawn, len(pieces))
 	drawn := s.drawn[:]
-	m, h := 0, 0
+	m = 0
+	h := 0
 	for c, k in pieces {
 		hide := h < len(s.hidden) && int(s.hidden[h]) == m
 		drawn[k] = !hide
