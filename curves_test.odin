@@ -2,7 +2,9 @@ package curves
 
 import "core:mem"
 import "core:math"
+import "core:fmt"
 import "core:slice"
+import "core:strings"
 import "core:testing"
 
 @(private = "file")
@@ -887,4 +889,10 @@ test_build_append_frame :: proc(t: ^testing.T) {
 		testing.expectf(t, !framed, "frame %v", f)
 		testing.expect_value(t, len(out), len(part))
 	}
+}
+
+@(test)
+test_glsl_format :: proc(t: ^testing.T) {
+	// The GLSL twin's layout number is the package's.
+	testing.expect(t, strings.contains(GLSL, fmt.tprintf("\n#define CURVES_FORMAT %v\n", FORMAT)))
 }
