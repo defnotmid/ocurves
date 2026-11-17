@@ -14,6 +14,9 @@ concurrency:
 env:
   # The Odin nightly ocurves is developed against (same pin as ovg).
   ODIN_VERSION: dev-2026-11a
+  # The oksl glsl_test compiles curves.glsl with (not a dependency of the
+  # curves package, which is core only).
+  OKSL_VERSION: v0.0.28
 
 jobs:
   test:
@@ -25,6 +28,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      # glsl_test's oksl, at ./oksl (so -collection:deps=. finds it).
+      - uses: actions/checkout@v4
+        with:
+          repository: defnotmid/oksl
+          ref: ${{ env.OKSL_VERSION }}
+          path: oksl
 
       - name: Cache Odin
         id: odin-cache
@@ -54,3 +64,6 @@ jobs:
         run: |
           mkdir -p build
           odin test . -vet -strict-style -out:build/curves_test
+
+      - name: Test curves.glsl against curves.odin
+        run: odin test glsl_test -collection:deps=. -vet -strict-style -out:build/glsl_test

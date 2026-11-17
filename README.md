@@ -116,7 +116,17 @@ cov := cv.coverage(words, (p - origin) / extent, {1, 1} / extent, .Non_Zero)
 
 ```sh
 odin test . -vet -strict-style
+odin test glsl_test -collection:deps=.. -vet -strict-style   # with oksl cloned beside ocurves
 ```
+
+`glsl_test` checks `curves.glsl` against `curves.odin`. It compiles the
+GLSL with [oksl](https://github.com/defnotmid/oksl) (v0.0.28 in CI) and runs
+it on oksl's CPU runner, with the words in a read-only storage buffer. The
+inputs are 96 random outlined shapes (open and closed contours, both fill
+rules) under six pixel maps (axis-aligned, flipped, rotated, skewed, zoomed
+in and out 9x), 32 x 32 pixels each. For every pixel it compares
+`coverage_affine`, `winding`, `hairline` and `marker` (filled and ringed,
+square and circle). It is its own package because `curves` is core only.
 
 The package's history before v0.0.1 is ovg's: it was ovg's `curves/`
 package and `shaders/curves.slang`, moved as of ovg 9cb03834 (v0.0.42).
