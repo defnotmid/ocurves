@@ -16,7 +16,7 @@ env:
   ODIN_VERSION: dev-2026-11a
   # The oksl glsl_test compiles curves.glsl with (not a dependency of the
   # curves package, which is core only).
-  OKSL_VERSION: v0.0.28
+  OKSL_VERSION: v0.1.0
 
 jobs:
   test:

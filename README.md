@@ -120,7 +120,7 @@ odin test glsl_test -collection:deps=.. -vet -strict-style   # with oksl cloned 
 ```
 
 `glsl_test` checks `curves.glsl` against `curves.odin`. It compiles the
-GLSL with [oksl](https://github.com/defnotmid/oksl) (v0.0.28 in CI) and runs
+GLSL with [oksl](https://github.com/defnotmid/oksl) (v0.1.0 in CI) and runs
 it on oksl's CPU runner, with the words in a read-only storage buffer. The
 inputs are 96 random outlined shapes (open and closed contours, both fill
 rules) under six pixel maps (axis-aligned, flipped, rotated, skewed, zoomed
