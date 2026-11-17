@@ -1,5 +1,5 @@
 // The GLSL twin of the curves package (curves.odin), in GLSL ES 3.0 as oksl
-// reads it, and the same functions as curves.slang: exact coverage of a
+// reads it, and the same reads as curves.odin's: exact coverage of a
 // pixel's footprint (a box, or any parallelogram) by a shape's monotone
 // quadratic pieces in a grid of cells with backdrops. The same arithmetic,
 // except that a pixel's crossing pieces are integrated after the scan (see

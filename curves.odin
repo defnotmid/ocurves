@@ -1,6 +1,6 @@
 // Shapes as curves for exact per-pixel coverage. Core only: renderers build
-// their shapes with it (ovg's and o3d's among them), and curves.slang and
-// curves.glsl (`GLSL`) are its GPU twins.
+// their shapes with it (ovg's and o3d's among them), and curves.glsl
+// (`GLSL`) is its GPU twin.
 //
 // A shape is quadratic Bézier curves split so each is monotone in x and y,
 // then cut at the vertical lines of a grid of cells, so every piece lies in
@@ -62,12 +62,12 @@ Curve :: struct {
 }
 
 HEADER :: 12
-// The layout of the words `build` writes and curves.slang and curves.glsl
-// read: bumped whenever a reader of one layout would misread the other's
-// words, so a shader compiled from another curves.slang refuses to build (a
-// renderer compiling its own #asserts it). test_format pins one shape's
-// words: when they change, bump this if the layout did. curves.glsl
-// defines it as CURVES_FORMAT.
+// The layout of the words `build` writes and curves.glsl reads: bumped
+// whenever a reader of one layout would misread the other's words, so a
+// renderer whose shaders were compiled from another curves.glsl can refuse
+// to build (it #asserts the FORMAT it compiled them against).
+// test_format pins one shape's words: when they change, bump this if the
+// layout did. curves.glsl defines it as CURVES_FORMAT.
 FORMAT :: 1
 // curves.glsl: the readers in GLSL ES 3.0 as oksl compiles it, for a host
 // to put ahead of its shader (oksl's Options.prelude), which defines
@@ -779,7 +779,7 @@ ceil :: #force_inline proc "contextless" (x: f32) -> int {
 	return i + 1 if f32(i) < x else i
 }
 
-// ---- reading (mirrored by curves.slang and curves.glsl) ---------------------
+// ---- reading (mirrored by curves.glsl) --------------------------------------
 
 // Bounds in shape units.
 bounds :: proc "contextless" (s: []u32) -> (minx, miny, maxx, maxy: f32) {

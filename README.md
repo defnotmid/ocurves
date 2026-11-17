@@ -2,7 +2,7 @@
 
 Native Odin curve geometry for vector renderers: shapes built as curves
 whose coverage of a pixel is computed exactly, on the CPU and (with
-`curves.slang` or `curves.glsl`) on the GPU, and booleans of filled contours that keep their
+`curves.glsl`) on the GPU, and booleans of filled contours that keep their
 curves. One package, `curves`, core only (no C library, no other
 dependency). MIT licensed ([LICENSE](LICENSE)).
 
@@ -28,19 +28,14 @@ shapes and text in 3D.
   its rows: exact under any affine footprint, and a pixel costs the pieces
   near it, not the shape's size. The layout is documented at the top of
   curves.odin.
-- **The GPU twin** (`curves.slang`): the same reads in Slang, for a shader
-  to include (`slangc -I <this checkout>`, `#include "curves.slang"`); it
-  binds nothing, and reads any number of shapes from one
-  `StructuredBuffer<uint>`. `Curves_Fill_Rule` and `curves_fill_inside`
-  are `Fill_Rule` and `fill_inside` there (the same order, so a rule
-  packed as 0 or 1 casts to it).
-- **The GLSL twin** (`curves.glsl`, shipped as the string `curves.GLSL`):
-  the same functions in GLSL ES 3.0 as [oksl](https://github.com/defnotmid/oksl)
+- **The GPU twin** (`curves.glsl`, shipped as the string `curves.GLSL`):
+  the same reads in GLSL ES 3.0 as [oksl](https://github.com/defnotmid/oksl)
   compiles it, for a host to put ahead of its shader (oksl's
-  `Options.prelude`). It binds nothing either: the shader defines `uint
-  curves_word(uint i)` over the buffer holding the words (a read-only
-  storage buffer, oksl v0.0.8 on). Fill rules are
-  the ints `CURVES_NON_ZERO` and `CURVES_EVEN_ODD` (0 and 1).
+  `Options.prelude`). It binds nothing, and reads any number of shapes
+  from one buffer: the shader defines `uint curves_word(uint i)` over the
+  buffer holding the words (a read-only storage buffer, oksl v0.0.8 on).
+  Fill rules are the ints `CURVES_NON_ZERO` and `CURVES_EVEN_ODD` (0 and
+  1, `Fill_Rule`'s order).
 - **Contours** (`contours.odin`): lines and cubics in one flat table (every
   contour's start point and then its segments' points, a line its end and
   a cubic its two controls and end; each segment's kind; a row per
@@ -83,15 +78,16 @@ shapes and text in 3D.
 
 ## The format
 
-`FORMAT` numbers the layout of the words `build` writes and `curves.slang`
+`FORMAT` numbers the layout of the words `build` writes and `curves.glsl`
 reads, and is bumped whenever a reader of one layout would misread the
-other's words (`test_format` pins one shape's words). A renderer that
-commits shaders compiled from `curves.slang` records the `FORMAT` it
-compiled them against and `#assert`s it equals `curves.FORMAT`, so it
-refuses to build against an ocurves its shaders would misread.
-`curves.GLSL` comes with the words from one package, so it always matches
-them; it defines `CURVES_FORMAT` for a shader that wants to check what it
-was written against (`#if CURVES_FORMAT != 1` / `#error`).
+other's words (`test_format` pins one shape's words). `curves.GLSL` comes
+with the words from one package, so a shader compiled from it at load
+always matches them; it defines `CURVES_FORMAT` for a shader that wants to
+check what it was written against (`#if CURVES_FORMAT != 1` / `#error`).
+A renderer that commits shaders compiled ahead of time records the
+`FORMAT` it compiled them against and `#assert`s it equals
+`curves.FORMAT`, so it refuses to build against an ocurves its shaders
+would misread.
 
 ## Use
 
@@ -124,4 +120,7 @@ odin test . -vet -strict-style
 
 The package's history before v0.0.1 is ovg's: it was ovg's `curves/`
 package and `shaders/curves.slang`, moved as of ovg 9cb03834 (v0.0.42).
+`curves.slang`, the readers in Slang, shipped until v0.0.17; `curves.glsl`
+replaced it once ovg (v0.0.75) and o3d (v0.0.60) compiled their shaders
+with oksl.
 ovg's `tools/bool_suite` fuzzes the booleans through its path API.

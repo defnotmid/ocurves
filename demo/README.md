@@ -15,7 +15,10 @@ onimite preview demo/video.lua                           # play, hot reload on s
 
 Everything it shows is data baked by `bake/main.odin` into
 `media/bake.json`, against the ocurves and ovg checkouts beside this one
-(ocurves v0.0.6, ovg v0.0.52), which prints every number the video shows:
+(ocurves v0.0.6, ovg v0.0.52), which prints every number the video shows.
+At those versions the GPU twin was `curves.slang`, which the video and
+its facts name; ovg reads `curves.glsl` since its v0.0.75 and ocurves
+ships only that since v0.0.18, so a new bake measures that one:
 
 ```sh
 sh demo/fetch.sh                                                   # once: Adwaita Sans, SHA-256 checked
